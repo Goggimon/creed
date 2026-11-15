@@ -1,0 +1,237 @@
+* {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif;
+    color: #E6EDF2;
+}
+
+QWidget#central_widget {
+    background-color: #080B0F;
+    border: 1px solid #1E2936;
+    border-radius: 14px;
+}
+
+QFrame#title_bar {
+    background-color: #0C1016;
+    border: 1px solid #1B2531;
+    border-radius: 8px;
+}
+
+QFrame#sidebar,
+QFrame#right_panel {
+    background-color: #10151B;
+    border: 1px solid #1B2531;
+    border-radius: 10px;
+}
+
+QFrame#workspace_frame {
+    background-color: #0B0F14;
+    border: 1px solid #1B2531;
+    border-radius: 10px;
+}
+
+QFrame#systems_panel,
+QFrame#activity_panel,
+QFrame#panel_card {
+    background-color: #151C24;
+    border: 1px solid #22303F;
+    border-radius: 8px;
+}
+
+QFrame#user_msg {
+    background-color: #132A36;
+    border: 1px solid #2D687A;
+    border-radius: 8px;
+}
+
+QFrame#ai_msg {
+    background-color: #121820;
+    border: 1px solid #22303F;
+    border-radius: 8px;
+}
+
+QLabel#msg_role_user {
+    color: #56D9E8;
+    font-family: "SF Mono", "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QLabel#msg_role_ai {
+    color: #8BAFBE;
+    font-family: "SF Mono", "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QLabel#msg_body {
+    color: #E6EDF2;
+    font-size: 13px;
+}
+
+QLabel#tool_badge {
+    color: #56D9E8;
+    font-family: "SF Mono", "IBM Plex Mono", monospace;
+    font-size: 11px;
+    padding: 4px 8px;
+}
+
+QLabel#tab_title {
+    color: #E6EDF2;
+    font-size: 14px;
+    font-weight: bold;
+    letter-spacing: 1.5px;
+}
+
+QLabel#section_header {
+    color: #8BAFBE;
+    font-family: "SF Mono", "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1.2px;
+}
+
+QLabel#meta_label {
+    color: #65727F;
+    font-size: 11px;
+}
+
+QLabel#accent_label {
+    color: #56D9E8;
+    font-family: "SF Mono", "IBM Plex Mono", monospace;
+    font-size: 11px;
+}
+
+QLabel#status_value {
+    color: #E6EDF2;
+    font-family: "SF Mono", "IBM Plex Mono", monospace;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QScrollArea#chat_area {
+    background-color: transparent;
+    border: none;
+}
+
+QScrollArea#chat_area > QWidget > QWidget {
+    background-color: transparent;
+}
+
+QLineEdit,
+QPlainTextEdit {
+    background-color: #10151B;
+    border: 1px solid #22303F;
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: #E6EDF2;
+    font-size: 12px;
+}
+
+QLineEdit:focus,
+QPlainTextEdit:focus {
+    border: 1px solid #56D9E8;
+}
+
+QFrame#connection_overlay {
+    background-color: rgba(8, 11, 15, 205);
+    border-radius: 10px;
+}
+
+QFrame#connection_overlay_card {
+    background-color: #121821;
+    border: 1px solid #F97316;
+    border-radius: 8px;
+}
+
+QLabel#connection_overlay_title {
+    color: #F97316;
+    font-family: "SF Mono", "IBM Plex Mono", monospace;
+    font-size: 13px;
+    font-weight: bold;
+    letter-spacing: 1.2px;
+}
+
+QPushButton#primary_btn {
+    background-color: #56D9E8;
+    color: #080B0F;
+    font-weight: bold;
+    font-size: 11px;
+    border-radius: 6px;
+    padding: 7px 14px;
+}
+
+QPushButton#primary_btn:hover {
+    background-color: #7EE5F1;
+}
+
+QPushButton#secondary_btn {
+    background-color: #151C24;
+    color: #8BAFBE;
+    border: 1px solid #22303F;
+    font-size: 11px;
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+
+QPushButton#secondary_btn:hover {
+    border: 1px solid #56D9E8;
+    color: #E6EDF2;
+}
+
+QPushButton#nav_btn {
+    background-color: transparent;
+    color: #8BAFBE;
+    text-align: left;
+    border: none;
+    border-left: 2px solid transparent;
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 12px;
+}
+
+QPushButton#nav_btn:hover {
+    background-color: #151C24;
+    color: #E6EDF2;
+}
+
+QPushButton#nav_btn[active="true"] {
+    background-color: #13222B;
+    color: #56D9E8;
+    border-left: 2px solid #56D9E8;
+    font-weight: bold;
+}
+
+QPushButton#win_btn {
+    background-color: #151C24;
+    color: #8BAFBE;
+    border: 1px solid #22303F;
+    border-radius: 4px;
+    font-size: 10px;
+}
+
+QPushButton#win_btn:hover {
+    border: 1px solid #56D9E8;
+    color: #E6EDF2;
+}
+
+QScrollBar:vertical {
+    border: none;
+    background: #0B0F14;
+    width: 6px;
+    border-radius: 3px;
+}
+
+QScrollBar::handle:vertical {
+    background: #22303F;
+    min-height: 20px;
+    border-radius: 3px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #56D9E8;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
