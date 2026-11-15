@@ -126,10 +126,10 @@ class Module:
         defaults = [
             (
                 "Study Mode",
-                "Lower Mac volume to 25% and send a focus notification.",
+                "Check Mac battery/uptime and open Visual Studio Code.",
                 [
-                    {"tool": "mac_set_volume", "args": {"level": 25}},
-                    {"tool": "mac_notify", "args": {"title": "CREED", "message": "Study Mode active. Stay locked in."}},
+                    {"tool": "mac_system_info", "args": {}},
+                    {"tool": "mac_open_app", "args": {"app_name": "Visual Studio Code"}},
                 ],
             ),
             (

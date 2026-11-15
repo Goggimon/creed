@@ -5,22 +5,35 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+STATE_COLORS = {
+    "Idle": "#56D9E8",
+    "Listening": "#00E5FF",
+    "Recording": "#F59E0B",
+    "Processing": "#3B82F6",
+    "Speaking": "#22C55E",
+    "Retrying Connection": "#F97316",
+    "Error": "#EF4444",
+    "Stopped": "#EAB308",
+}
+
 
 class NeuralLinkBar(QWidget):
-    """Subtle animated telemetry bar reflecting system activity."""
+    """Animated telemetry bar matching the active system state color."""
 
     def __init__(self):
         super().__init__()
         self.setFixedHeight(28)
         self._phase = 0.0
         self._active = False
+        self._color = QColor("#56D9E8")
         self._timer = QTimer(self)
-        self._timer.setInterval(70)
+        self._timer.setInterval(65)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
-    def set_active(self, active: bool):
+    def set_active(self, active: bool, color: str = "#56D9E8"):
         self._active = active
+        self._color = QColor(color)
 
     def _tick(self):
         step = 0.35 if self._active else 0.1
@@ -37,12 +50,13 @@ class NeuralLinkBar(QWidget):
 
         for i in range(bars):
             wave = 0.5 + 0.5 * math.sin(self._phase + i * 0.55)
-            amp = 0.35 + 0.65 * wave if self._active else 0.18 + 0.28 * wave
+            amp = 0.35 + 0.65 * wave if self._active else 0.2 + 0.3 * wave
             bh = max(3, int(h * amp))
             x = i * spacing + 2
             y = self.height() - bh - 2
-            alpha = 200 if self._active else 95
-            painter.fillRect(x, y, bar_w, bh, QColor(86, 217, 232, alpha))
+            c = QColor(self._color)
+            c.setAlpha(215 if self._active else 110)
+            painter.fillRect(x, y, bar_w, bh, c)
 
 
 class StatusBar(QFrame):
@@ -62,7 +76,7 @@ class StatusBar(QFrame):
         status_row.setSpacing(8)
         self.status_dot = QLabel()
         self.status_dot.setFixedSize(10, 10)
-        self.system_state = QLabel("Idle")
+        self.system_state = QLabel("IDLE")
         self.system_state.setObjectName("status_value")
         status_row.addWidget(self.status_dot)
         status_row.addWidget(self.system_state)
@@ -88,20 +102,15 @@ class StatusBar(QFrame):
         self.set_status("Idle")
 
     def set_status(self, state: str):
+        color = STATE_COLORS.get(state, "#65727F")
         self.system_state.setText(state.upper())
-        color_map = {
-            "Idle": "#22C55E",
-            "Listening": "#56D9E8",
-            "Recording": "#F59E0B",
-            "Processing": "#56D9E8",
-            "Speaking": "#22C55E",
-            "Retrying Connection": "#F97316",
-            "Error": "#EF4444",
-            "Stopped": "#EAB308",
-        }
-        color = color_map.get(state, "#65727F")
+        self.system_state.setStyleSheet(
+            f"color: {color}; font-family: 'SF Mono', monospace; font-size: 12px; font-weight: bold;"
+        )
         self.status_dot.setStyleSheet(f"background-color: {color}; border-radius: 5px;")
-        self.neural_bar.set_active(state in ("Listening", "Recording", "Processing", "Speaking"))
+        self.neural_bar.set_active(
+            state in ("Listening", "Recording", "Processing", "Speaking"), color=color
+        )
 
     def update_snapshot(self, snapshot: dict):
         model = snapshot.get("model", "unknown")

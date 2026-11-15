@@ -4,19 +4,13 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 
+from components.status_bar import STATE_COLORS
+
+
 class VoiceIndicator(QWidget):
     """Real-activity circular audio visualizer for CREED's voice pipeline."""
 
-    STATE_COLORS = {
-        "Idle": "#65727F",
-        "Listening": "#56D9E8",
-        "Recording": "#F59E0B",
-        "Processing": "#3B82F6",
-        "Speaking": "#22C55E",
-        "Retrying Connection": "#F97316",
-        "Error": "#EF4444",
-        "Stopped": "#EAB308",
-    }
+    STATE_COLORS = STATE_COLORS
 
     def __init__(self, diameter: int = 160):
         super().__init__()

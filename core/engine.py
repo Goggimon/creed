@@ -180,9 +180,9 @@ class CreedEngine:
                 {
                     "id": "mac",
                     "name": "macOS Host",
-                    "description": "Local Apple Silicon control (apps, volume, clipboard, notifications).",
+                    "description": "Local Apple Silicon control (apps, clipboard, battery/uptime).",
                     "state": "Online",
-                    "detail": "Native osascript / open / pbcopy",
+                    "detail": "Native open / pbcopy / pmset",
                 },
                 {
                     "id": "bluetooth",

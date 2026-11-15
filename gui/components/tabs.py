@@ -540,6 +540,7 @@ class AutomationTab(QWidget):
 
 class SettingsTab(QWidget):
     save_requested = Signal(dict)
+    restart_gui_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -579,10 +580,19 @@ class SettingsTab(QWidget):
 
         layout.addWidget(form)
 
+        btn_row = QHBoxLayout()
         save_btn = QPushButton("SAVE TO .ENV")
         save_btn.setObjectName("primary_btn")
         save_btn.clicked.connect(self._emit_save)
-        layout.addWidget(save_btn, alignment=Qt.AlignLeft)
+
+        restart_btn = QPushButton("↻ REFRESH / RESTART GUI")
+        restart_btn.setObjectName("secondary_btn")
+        restart_btn.clicked.connect(self.restart_gui_requested.emit)
+
+        btn_row.addWidget(save_btn)
+        btn_row.addWidget(restart_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
         layout.addStretch()
 
     def update_data(self, cfg: dict):

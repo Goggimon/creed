@@ -4,7 +4,7 @@ import os
 import sys
 from datetime import datetime
 import httpx
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import (
     QApplication,
@@ -18,12 +18,17 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+except ImportError:
+    QWebEngineView = None
 from worker import WebSocketWorker
 from components.chat_view import ChatView
 from components.input_bar import InputBar
 from components.insignia import CreedInsigniaWidget
 from components.radial_hub import RadialHubWidget
-from components.status_bar import StatusBar
+from components.status_bar import STATE_COLORS, StatusBar
 from components.tabs import (
     AutomationTab,
     MemoryTab,
@@ -186,7 +191,7 @@ class MainWindow(QMainWindow):
         self.top_insignia = CreedInsigniaWidget(size=24)
         self.title_label = QLabel("CREED")
         self.title_label.setObjectName("tab_title")
-        self.version_label = QLabel("v2.0.0")
+        self.version_label = QLabel("v2.1.0")
         self.version_label.setObjectName("meta_label")
         self.top_status_pill = QLabel("● RETRYING CONNECTION")
         self.top_status_pill.setObjectName("accent_label")
@@ -303,15 +308,19 @@ class MainWindow(QMainWindow):
 
         self.connection_overlay = ConnectionOverlay(self.workspace_frame)
 
-        # Tab 0: Overview (Holographic Nucleus + Quick Command Input)
+        # Tab 0: Overview (Native 60 FPS 3D-Projected Amber Holographic Sphere + Command Bar)
         overview_page = QWidget()
         ov_lay = QVBoxLayout(overview_page)
         ov_lay.setContentsMargins(12, 10, 12, 10)
         ov_lay.setSpacing(6)
+
         ov_hdr = QLabel("CREED // CENTRAL INTELLIGENCE HUB")
         ov_hdr.setObjectName("section_header")
+
+        self.web_visualizer = None
         self.radial_hub = RadialHubWidget()
         self.radial_hub.node_clicked.connect(self.switch_tab)
+
         self.overview_input = InputBar("Command CREED across Mac, Bluetooth, or Phone...")
         self.overview_input.submitted.connect(self.handle_overview_send)
         self.overview_input.voice_clicked.connect(self.handle_voice_toggle)
@@ -370,6 +379,7 @@ class MainWindow(QMainWindow):
 
         self.settings_tab = SettingsTab()
         self.settings_tab.save_requested.connect(self.save_settings)
+        self.settings_tab.restart_gui_requested.connect(self.restart_gui)
 
         for page in (
             overview_page,
@@ -436,6 +446,14 @@ class MainWindow(QMainWindow):
             btn.style().polish(btn)
         if index in (2, 3, 4, 5, 6, 7) and self._is_connected:
             self.fetch_snapshot()
+
+    def _on_visualizer_title(self, title: str):
+        if title.startswith("CREED_TAB:"):
+            try:
+                tab_idx = int(title.split(":")[1])
+                self.switch_tab(tab_idx)
+            except (IndexError, ValueError):
+                pass
 
     def toggle_right_panel(self):
         self._right_collapsed = not self._right_collapsed
@@ -583,19 +601,21 @@ class MainWindow(QMainWindow):
     # Chat & Voice Logic
     # ----------------------------
     def handle_overview_send(self, text: str):
-        self.switch_tab(1)
+        # Stay on the Overview Intelligence Hub while logging the chat in Conversation
         self.handle_send(text)
 
     def handle_send(self, text: str):
         self.chat_view.add_bubble(text, True)
         self.current_ai_bubble = self.chat_view.add_bubble("", False)
-        self.radial_hub.pulse_node("CONVERSATION")
+        if self.radial_hub:
+            self.radial_hub.pulse_node("CONVERSATION")
         self.ws_worker.send_message(
             {"type": "chat", "text": text, "session_id": self._current_session_id}
         )
 
     def handle_voice_toggle(self):
-        self.radial_hub.pulse_node("VOICE")
+        if self.radial_hub:
+            self.radial_hub.pulse_node("VOICE")
         self.ws_worker.send_message({"type": "voice_toggle"})
 
     def stop_generation(self):
@@ -612,29 +632,40 @@ class MainWindow(QMainWindow):
         self.fetch_snapshot()
 
     def handle_transcription(self, text: str):
-        self.switch_tab(1)
+        # Stay on the current hub/tab; record transcription in Conversation
         self.chat_view.add_bubble(text, True)
         self.current_ai_bubble = self.chat_view.add_bubble("", False)
 
+    def restart_gui(self):
+        import subprocess
+        from pathlib import Path
+
+        app_path = Path(__file__).resolve().parent / "app.py"
+        subprocess.Popen([sys.executable, str(app_path)], start_new_session=True)
+        self.close()
+
     def on_status_changed(self, state: str):
+        color = STATE_COLORS.get(state, "#56D9E8")
         self.status_bar.set_status(state)
         self.voice_tab.set_status(state)
-        self.radial_hub.set_core_state(state)
+        if self.radial_hub:
+            self.radial_hub.set_core_state(state)
         self.top_status_pill.setText(f"● {state.upper()}")
-        if state == "Retrying Connection":
-            self.top_status_pill.setStyleSheet("color: #F97316; font-family: 'SF Mono', monospace; font-size: 11px;")
-        elif state == "Error":
-            self.top_status_pill.setStyleSheet("color: #EF4444; font-family: 'SF Mono', monospace; font-size: 11px;")
-        else:
-            self.top_status_pill.setStyleSheet("color: #56D9E8; font-family: 'SF Mono', monospace; font-size: 11px;")
-        glow = 0.9 if state in ("Processing", "Speaking", "Recording") else 0.5
+        self.top_status_pill.setStyleSheet(
+            f"color: {color}; font-family: 'SF Mono', monospace; font-size: 11px;"
+        )
+        glow = 0.95 if state in ("Processing", "Speaking", "Recording", "Listening") else 0.6
         self.side_insignia.set_glow(glow)
+        self.side_insignia.set_accent(color)
         self.top_insignia.set_glow(glow)
+        self.top_insignia.set_accent(color)
 
     def on_connected(self):
         self._is_connected = True
         self.connection_overlay.hide()
         self.on_status_changed("Idle")
+        if self.web_visualizer is not None:
+            self.web_visualizer.setUrl(QUrl("http://localhost:8000/visualizer"))
         self.fetch_snapshot()
 
     def on_disconnected(self):
@@ -662,9 +693,9 @@ class MainWindow(QMainWindow):
         self._clock_timer.stop()
         self._snapshot_timer.stop()
         self.ws_worker.stop()
-        if not self.ws_worker.wait(400):
-            self.ws_worker.terminate()
+        self.ws_worker.wait(300)
         for w in list(self._active_api_workers):
             w.wait(200)
         event.accept()
         QApplication.quit()
+        os._exit(0)

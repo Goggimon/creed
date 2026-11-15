@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from config.settings import BASE_DIR, config
 from core.engine import CreedEngine
 from core.event_bus import event_bus
@@ -105,6 +105,11 @@ event_bus.subscribe("voice_level", on_voice_level)
 @app.get("/")
 def health_check():
     return {"status": "CREED backend online", "version": config.version}
+
+
+@app.get("/visualizer")
+def serve_visualizer():
+    return FileResponse(Path(BASE_DIR) / "gui" / "web" / "visualizer.html")
 
 
 @app.get("/api/snapshot")
