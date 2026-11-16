@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from config.settings import BASE_DIR, config
 from core.engine import CreedEngine
 from core.event_bus import event_bus
@@ -23,6 +24,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+vspotify_path = Path(config.vspotify_dir)
+if vspotify_path.exists():
+    app.mount("/vspotify", StaticFiles(directory=str(vspotify_path), html=True), name="vspotify")
 
 
 class ConnectionManager:
@@ -91,6 +96,10 @@ async def on_voice_level(level):
     await manager.broadcast({"type": "voice_level", "level": level})
 
 
+async def on_vspotify_command(payload):
+    await manager.broadcast({"type": "vspotify_command", "payload": payload})
+
+
 event_bus.subscribe("status_change", on_status_change)
 event_bus.subscribe("llm_token", on_llm_token)
 event_bus.subscribe("llm_done", on_llm_done)
@@ -100,6 +109,7 @@ event_bus.subscribe("activity", on_activity)
 event_bus.subscribe("tool_event", on_tool_event)
 event_bus.subscribe("node_pulse", on_node_pulse)
 event_bus.subscribe("voice_level", on_voice_level)
+event_bus.subscribe("vspotify_command", on_vspotify_command)
 
 
 @app.get("/")
@@ -219,6 +229,7 @@ def update_settings(payload: dict):
 
     mapping = {
         "ollama_model": "OLLAMA_MODEL",
+        "jee_tutor_model": "JEE_TUTOR_MODEL",
         "ollama_endpoint": "OLLAMA_ENDPOINT",
         "macos_tts_voice": "CREED_MACOS_VOICE",
         "macos_tts_rate": "CREED_TTS_RATE",
@@ -246,6 +257,123 @@ def update_settings(payload: dict):
     return {"status": "saved", "config": engine.get_system_snapshot()["config"]}
 
 
+@app.post("/api/models/select")
+async def select_model(payload: dict):
+    model = (payload.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="Model name is required.")
+    update_settings({"ollama_model": model})
+    await engine._emit_activity("LLM", f"Active model set to {model}")
+    return {"status": "ok", "model": model}
+
+
+@app.post("/api/models/pull")
+async def pull_model(payload: dict):
+    model = (payload.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="Model name is required.")
+    if engine.model_pull_status.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Already pulling {engine.model_pull_status.get('model')}.",
+        )
+    asyncio.create_task(engine.pull_ollama_model(model))
+    return {"status": "started", "model": model}
+
+
+@app.post("/api/models/delete")
+async def delete_model(payload: dict):
+    model = (payload.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="Model name is required.")
+    if model == engine.ai.model:
+        raise HTTPException(status_code=400, detail="Cannot delete the currently active model.")
+    try:
+        return await engine.delete_ollama_model(model)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/vspotify/command")
+async def vspotify_command(payload: dict):
+    from modules.vspotify import dispatch_vspotify_command
+
+    action = (payload.get("action") or "").strip()
+    params = payload.get("params") or {}
+    if not action:
+        raise HTTPException(status_code=400, detail="Action is required.")
+    msg = await dispatch_vspotify_command(action, params)
+    return {"status": "ok", "message": msg}
+
+
+@app.post("/api/jee/flashcards")
+def add_jee_flashcard(payload: dict):
+    memory_mod = engine.modules.get("memory")
+    if not memory_mod:
+        raise HTTPException(status_code=500, detail="Memory module unavailable.")
+    front = (payload.get("front") or "").strip()
+    back = (payload.get("back") or "").strip()
+    if not front or not back:
+        raise HTTPException(status_code=400, detail="Front and back are required.")
+    card = memory_mod.add_flashcard(
+        payload.get("subject", "Physics"),
+        payload.get("chapter", "General"),
+        front,
+        back,
+    )
+    return {"status": "ok", "card": card}
+
+
+@app.post("/api/jee/flashcards/{card_id}/toggle")
+def toggle_jee_flashcard(card_id: int):
+    memory_mod = engine.modules.get("memory")
+    if not memory_mod:
+        raise HTTPException(status_code=500, detail="Memory module unavailable.")
+    if not memory_mod.toggle_flashcard_mastery(card_id):
+        raise HTTPException(status_code=404, detail="Flashcard not found.")
+    return {"status": "ok"}
+
+
+@app.delete("/api/jee/flashcards/{card_id}")
+def delete_jee_flashcard(card_id: int):
+    memory_mod = engine.modules.get("memory")
+    if not memory_mod:
+        raise HTTPException(status_code=500, detail="Memory module unavailable.")
+    if not memory_mod.delete_flashcard(card_id):
+        raise HTTPException(status_code=404, detail="Flashcard not found.")
+    return {"status": "ok"}
+
+
+@app.post("/api/jee/test/generate")
+async def generate_jee_test(payload: dict):
+    from modules.jee_tutor import generate_jee_quiz, pick_reasoning_model
+
+    subject = (payload.get("subject") or "Physics").strip()
+    chapter = (payload.get("chapter") or "").strip()
+    difficulty = (payload.get("difficulty") or "JEE Main").strip()
+    count = max(1, min(15, int(payload.get("count") or 5)))
+    model = pick_reasoning_model(engine.installed_model_names)
+    try:
+        questions = await generate_jee_quiz(subject, chapter, difficulty, count, model)
+        return {"status": "ok", "model": model, "questions": questions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/jee/test/submit")
+def submit_jee_test(payload: dict):
+    memory_mod = engine.modules.get("memory")
+    if not memory_mod:
+        raise HTTPException(status_code=500, detail="Memory module unavailable.")
+    saved = memory_mod.save_jee_test(
+        payload.get("subject", "Mixed"),
+        payload.get("difficulty", "JEE Main"),
+        int(payload.get("score", 0)),
+        int(payload.get("total", 0)),
+    )
+    return {"status": "ok", "test": saved}
+
+
 @app.post("/chat")
 async def chat(payload: dict):
     """Legacy HTTP endpoint for compatibility."""
@@ -271,10 +399,13 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_json()
             msg_type = data.get("type")
             session_id = data.get("session_id") or "default"
+            mode = data.get("mode") or "default"
 
             if msg_type == "chat":
                 text = data.get("text", "")
-                asyncio.create_task(engine.process_text(text, session_id=session_id))
+                asyncio.create_task(
+                    engine.process_text(text, session_id=session_id, mode=mode)
+                )
             elif msg_type == "stop":
                 engine.stop_all()
                 await event_bus.publish("status_change", "Idle")

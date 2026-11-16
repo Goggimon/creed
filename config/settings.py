@@ -21,6 +21,7 @@ class CreedConfig:
 
     # LLM (Local Ollama)
     ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+    jee_tutor_model: str = os.getenv("JEE_TUTOR_MODEL", "qwen3:8b")
     ollama_endpoint: str = os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434/api/chat")
     ollama_timeout: float = float(os.getenv("OLLAMA_TIMEOUT", "60.0"))
     max_tool_iterations: int = int(os.getenv("CREED_MAX_TOOL_STEPS", "5"))
@@ -43,8 +44,11 @@ class CreedConfig:
     macos_tts_voice: str = os.getenv("CREED_MACOS_VOICE", "Samantha")
     macos_tts_rate: int = int(os.getenv("CREED_TTS_RATE", "190"))
 
-    # Multi-system Device Targets
+    # Multi-system Device Targets & Integrated Apps
     phone_adb_target: str = os.getenv("CREED_PHONE_ADB_TARGET", "")
+    vspotify_dir: str = os.getenv(
+        "VSPOTIFY_DIR", str(BASE_DIR.parent / "VSpotify")
+    )
 
 
 config = CreedConfig()

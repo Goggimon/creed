@@ -3,18 +3,31 @@
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+
+DOCUMENTS_ROOT = (Path.home() / "Documents").resolve()
 
 
-def _run(cmd: list[str], input_text: str = None) -> tuple[int, str, str]:
+def _run(cmd: list[str], input_text: str = None, timeout: int = 10) -> tuple[int, str, str]:
     proc = subprocess.run(
         cmd,
         input=input_text,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=timeout,
         check=False,
     )
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def _resolve_safe_path(path_str: str) -> Path:
+    p = Path(path_str).expanduser()
+    if not p.is_absolute():
+        p = DOCUMENTS_ROOT / p
+    resolved = p.resolve()
+    if DOCUMENTS_ROOT not in resolved.parents and resolved != DOCUMENTS_ROOT:
+        raise ValueError(f"Path must be inside {DOCUMENTS_ROOT}")
+    return resolved
 
 
 def mac_open_app(app_name: str) -> str:
@@ -50,6 +63,41 @@ def mac_system_info() -> str:
     _, batt, _ = _run(["pmset", "-g", "batt"])
     _, up, _ = _run(["uptime"])
     return f"Battery:\n{batt}\n\nUptime:\n{up}"
+
+
+def fs_write_file(path: str, content: str, open_in_vscode: bool = True) -> str:
+    try:
+        target = _resolve_safe_path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        if open_in_vscode and sys.platform == "darwin":
+            _run(["open", "-a", "Visual Studio Code", str(target)])
+        return f"Wrote {len(content)} chars to {target}"
+    except Exception as e:
+        return f"Failed to write file: {e}"
+
+
+def fs_read_file(path: str) -> str:
+    try:
+        target = _resolve_safe_path(path)
+        if not target.exists():
+            return f"File not found: {target}"
+        return target.read_text(encoding="utf-8")[:4000]
+    except Exception as e:
+        return f"Failed to read file: {e}"
+
+
+def run_python_file(path: str) -> str:
+    try:
+        target = _resolve_safe_path(path)
+        if not target.exists():
+            return f"Python file not found: {target}"
+        code, out, err = _run([sys.executable, str(target)], timeout=15)
+        if code == 0:
+            return f"Output:\n{out or '(no output)'}"
+        return f"Exit {code}:\n{err or out}"
+    except Exception as e:
+        return f"Failed to run script: {e}"
 
 
 def register_tools(registry):
@@ -88,4 +136,42 @@ def register_tools(registry):
         description="Get Mac battery status, charging state, and system uptime.",
         parameters={"type": "object", "properties": {}},
         handler=mac_system_info,
+    )
+    registry.register(
+        name="fs_write_file",
+        description="Create or overwrite a code/text file inside ~/Documents and optionally open it in VS Code.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path relative to ~/Documents (e.g. Apps/test/sum.py) or absolute path inside ~/Documents"},
+                "content": {"type": "string", "description": "Full file content to write"},
+                "open_in_vscode": {"type": "boolean", "description": "Open the file in Visual Studio Code (default true)"},
+            },
+            "required": ["path", "content"],
+        },
+        handler=fs_write_file,
+    )
+    registry.register(
+        name="fs_read_file",
+        description="Read a file inside ~/Documents.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path relative to ~/Documents or absolute path inside ~/Documents"}
+            },
+            "required": ["path"],
+        },
+        handler=fs_read_file,
+    )
+    registry.register(
+        name="run_python_file",
+        description="Execute a Python script inside ~/Documents and return its stdout/stderr.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the .py file inside ~/Documents"}
+            },
+            "required": ["path"],
+        },
+        handler=run_python_file,
     )

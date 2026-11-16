@@ -85,11 +85,52 @@ class Module:
                     )
                     """
                 )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS jee_flashcards (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        subject TEXT NOT NULL,
+                        chapter TEXT NOT NULL,
+                        front TEXT NOT NULL,
+                        back TEXT NOT NULL,
+                        mastered INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS jee_tests (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        subject TEXT NOT NULL,
+                        difficulty TEXT NOT NULL,
+                        score INTEGER NOT NULL,
+                        total INTEGER NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
                 now = datetime.now().isoformat()
                 conn.execute(
                     "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
                     ("default", "Primary Session", now, now),
                 )
+                fc_count = conn.execute("SELECT COUNT(*) FROM jee_flashcards").fetchone()[0]
+                if fc_count == 0:
+                    seeds = [
+                        ("Physics", "Modern Physics", "Stopping potential V0 in Photoelectric Effect", "eV0 = hf - phi0 = hc/lambda - phi0 (independent of intensity!)", 0),
+                        ("Physics", "Current Electricity", "Wheatstone Bridge balance condition", "R1 / R2 = R3 / R4 -> zero current through galvanometer.", 0),
+                        ("Physics", "Thermodynamics", "Adiabatic process equation & work done", "PV^gamma = const; W = (P1V1 - P2V2) / (gamma - 1) = nR(T1 - T2) / (gamma - 1).", 0),
+                        ("Chemistry", "Chemical Bonding", "Paramagnetic diatomic molecules in MOT", "B2 (10e) and O2 (16e) have 2 unpaired electrons in pi* / pi orbitals.", 0),
+                        ("Chemistry", "Electrochemistry", "Nernst Equation at 298 K", "E = E0 - (0.0591 / n) * log10(Q).", 0),
+                        ("Maths", "Definite Integration", "King's Property", "Integral from a to b of f(x) dx = Integral from a to b of f(a + b - x) dx.", 0),
+                        ("Maths", "Vectors & 3D", "Shortest distance between skew lines", "d = |(a2 - a1) . (b1 x b2)| / |b1 x b2|.", 0),
+                    ]
+                    for subj, chap, front, back, mast in seeds:
+                        conn.execute(
+                            "INSERT INTO jee_flashcards (subject, chapter, front, back, mastered, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                            (subj, chap, front, back, mast, now),
+                        )
                 conn.commit()
 
     def _migrate_legacy_json(self):
@@ -367,6 +408,84 @@ class Module:
                 cur = conn.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
                 conn.commit()
                 return cur.rowcount > 0
+
+    # -------- JEE FLASHCARDS & TESTS --------
+    def list_flashcards(self, subject: str = "") -> list[dict]:
+        with self.lock:
+            with self._connect() as conn:
+                if subject and subject.lower() != "all":
+                    rows = conn.execute(
+                        "SELECT id, subject, chapter, front, back, mastered, created_at FROM jee_flashcards WHERE LOWER(subject) = LOWER(?) ORDER BY id DESC",
+                        (subject,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT id, subject, chapter, front, back, mastered, created_at FROM jee_flashcards ORDER BY id DESC"
+                    ).fetchall()
+                return [dict(r) for r in rows]
+
+    def add_flashcard(self, subject: str, chapter: str, front: str, back: str) -> dict:
+        now = datetime.now().isoformat()
+        with self.lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "INSERT INTO jee_flashcards (subject, chapter, front, back, mastered, created_at) VALUES (?, ?, ?, ?, 0, ?)",
+                    (subject.strip() or "Physics", chapter.strip() or "General", front.strip(), back.strip(), now),
+                )
+                conn.commit()
+                return {
+                    "id": cur.lastrowid,
+                    "subject": subject.strip() or "Physics",
+                    "chapter": chapter.strip() or "General",
+                    "front": front.strip(),
+                    "back": back.strip(),
+                    "mastered": 0,
+                    "created_at": now,
+                }
+
+    def toggle_flashcard_mastery(self, card_id: int) -> bool:
+        with self.lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE jee_flashcards SET mastered = CASE WHEN mastered = 1 THEN 0 ELSE 1 END WHERE id = ?",
+                    (card_id,),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+
+    def delete_flashcard(self, card_id: int) -> bool:
+        with self.lock:
+            with self._connect() as conn:
+                cur = conn.execute("DELETE FROM jee_flashcards WHERE id = ?", (card_id,))
+                conn.commit()
+                return cur.rowcount > 0
+
+    def save_jee_test(self, subject: str, difficulty: str, score: int, total: int) -> dict:
+        now = datetime.now().isoformat()
+        with self.lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "INSERT INTO jee_tests (subject, difficulty, score, total, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (subject, difficulty, int(score), int(total), now),
+                )
+                conn.commit()
+                return {
+                    "id": cur.lastrowid,
+                    "subject": subject,
+                    "difficulty": difficulty,
+                    "score": int(score),
+                    "total": int(total),
+                    "created_at": now,
+                }
+
+    def list_jee_tests(self, limit: int = 20) -> list[dict]:
+        with self.lock:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT id, subject, difficulty, score, total, created_at FROM jee_tests ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+                return [dict(r) for r in rows]
 
     # -------- INTENT HANDLERS --------
     def handle(self, intent, text, context):

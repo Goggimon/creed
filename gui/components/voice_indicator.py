@@ -56,47 +56,49 @@ class VoiceIndicator(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter = QPainter()
+        if not painter.begin(self):
+            return
+        try:
+            painter.setRenderHint(QPainter.Antialiasing)
 
-        color = QColor(self.STATE_COLORS.get(self._state, "#65727F"))
-        cx = self.width() / 2.0
-        cy = (self.height() - 24) / 2.0
-        base_r = self._diameter * 0.28
+            color = QColor(self.STATE_COLORS.get(self._state, "#71717A"))
+            cx = self.width() / 2.0
+            cy = (self.height() - 24) / 2.0
+            base_r = self._diameter * 0.28
 
-        # Subtle outer orbital guide
-        guide_pen = QPen(QColor(86, 217, 232, 35), 1.0)
-        painter.setPen(guide_pen)
-        painter.setBrush(Qt.NoBrush)
-        painter.drawEllipse(int(cx - base_r * 1.45), int(cy - base_r * 1.45), int(base_r * 2.9), int(base_r * 2.9))
+            guide_pen = QPen(QColor(255, 255, 255, 24), 1.0)
+            painter.setPen(guide_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(int(cx - base_r * 1.45), int(cy - base_r * 1.45), int(base_r * 2.9), int(base_r * 2.9))
 
-        # Active energy ring (driven by real RMS audio level for Listening/Recording)
-        if self._state in ("Listening", "Recording"):
-            dynamic_r = base_r + (self._audio_level * base_r * 0.7)
-        elif self._state in ("Processing", "Speaking"):
-            dynamic_r = base_r + (0.15 + 0.1 * math.sin(self._phase)) * base_r
-        else:
-            dynamic_r = base_r
+            if self._state in ("Listening", "Recording"):
+                dynamic_r = base_r + (self._audio_level * base_r * 0.7)
+            elif self._state in ("Processing", "Speaking"):
+                dynamic_r = base_r + (0.15 + 0.1 * math.sin(self._phase)) * base_r
+            else:
+                dynamic_r = base_r
 
-        ring_color = QColor(color)
-        ring_color.setAlpha(150)
-        painter.setPen(QPen(ring_color, 2.0))
-        painter.drawEllipse(
-            int(cx - dynamic_r),
-            int(cy - dynamic_r),
-            int(dynamic_r * 2),
-            int(dynamic_r * 2),
-        )
+            ring_color = QColor(color)
+            ring_color.setAlpha(150)
+            painter.setPen(QPen(ring_color, 2.0))
+            painter.drawEllipse(
+                int(cx - dynamic_r),
+                int(cy - dynamic_r),
+                int(dynamic_r * 2),
+                int(dynamic_r * 2),
+            )
 
-        # Core dot
-        painter.setPen(Qt.NoPen)
-        core_color = QColor(color)
-        core_color.setAlpha(210)
-        painter.setBrush(core_color)
-        core_r = base_r * 0.45
-        painter.drawEllipse(
-            int(cx - core_r),
-            int(cy - core_r),
-            int(core_r * 2),
-            int(core_r * 2),
-        )
+            painter.setPen(Qt.NoPen)
+            core_color = QColor(color)
+            core_color.setAlpha(210)
+            painter.setBrush(core_color)
+            core_r = base_r * 0.45
+            painter.drawEllipse(
+                int(cx - core_r),
+                int(cy - core_r),
+                int(core_r * 2),
+                int(core_r * 2),
+            )
+        finally:
+            painter.end()

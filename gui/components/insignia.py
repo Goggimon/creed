@@ -11,7 +11,7 @@ def draw_creed_insignia(
     cy: float,
     size: float,
     glow_intensity: float = 0.65,
-    accent_color: str = "#56D9E8",
+    accent_color: str = "#6EA8FE",
 ):
     """Draw the geometric winged CREED insignia centered at (cx, cy) with dynamic state tint."""
     painter.save()
@@ -109,12 +109,17 @@ class CreedInsigniaWidget(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        draw_creed_insignia(
-            painter,
-            self.width() / 2.0,
-            self.height() / 2.0,
-            self._icon_size,
-            self._glow,
-            accent_color=self._accent,
-        )
+        painter = QPainter()
+        if not painter.begin(self):
+            return
+        try:
+            draw_creed_insignia(
+                painter,
+                self.width() / 2.0,
+                self.height() / 2.0,
+                self._icon_size,
+                self._glow,
+                accent_color=self._accent,
+            )
+        finally:
+            painter.end()

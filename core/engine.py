@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import shutil
 import subprocess
 import threading
 import time
@@ -19,16 +18,20 @@ from modules.tts import TTSModule
 
 logger = logging.getLogger("CreedEngine")
 
-SYSTEM_PROMPT = {
-    "role": "system",
-    "content": (
-        "You are CREED, a sharp, multi-system AI agent running on the user's Mac. "
-        "You can control the Mac (apps, volume, clipboard, notifications), Bluetooth speakers, "
-        "the user's Android phone via ADB/scrcpy, and persistent SQLite memory using your tools. "
-        "When the user asks you to perform a system or device action, call the appropriate tool(s) first, "
-        "then report the real result concisely in 1–4 short sentences unless detail is requested."
-    ),
-}
+def build_system_prompt(model_name: str) -> dict:
+    return {
+        "role": "system",
+        "content": (
+            f"You are CREED, a sharp, local-first multi-system AI agent running on the user's Mac. "
+            f"Your underlying language model is '{model_name}', running 100% locally via Ollama "
+            f"(you are NOT OpenAI, ChatGPT, or GPT-4). "
+            f"You can control the Mac (apps, volume, clipboard, notifications, and files/Python scripts "
+            f"in ~/Documents via fs_write_file, fs_read_file, and run_python_file), Bluetooth speakers, "
+            f"the user's Android phone via ADB/scrcpy, and persistent SQLite memory using your tools. "
+            f"When the user asks you to perform a system, file, or device action, call the appropriate "
+            f"tool(s) first, then report the real result concisely in 1–4 short sentences unless detail is requested."
+        ),
+    }
 
 
 class CreedEngine:
@@ -37,8 +40,6 @@ class CreedEngine:
         self.tools = ToolRegistry()
         self.running = False
         self.start_time = time.monotonic()
-        self.sessions = {"default": [SYSTEM_PROMPT.copy()]}
-        self.history = self.sessions["default"]
         self.context = {}
         self.lock = threading.Lock()
         self._reminder_task = None
@@ -46,11 +47,23 @@ class CreedEngine:
 
         self.activity_log = deque(maxlen=50)
         self.tool_history = deque(maxlen=30)
+        self.vspotify_queue = deque(maxlen=25)
+        self.installed_model_names = []
+        self.model_pull_status = {
+            "active": False,
+            "model": "",
+            "status": "idle",
+            "percent": 0,
+            "error": "",
+        }
 
         # Core Modules
         self.ai = LocalAI()
         self.tts = TTSModule()
         self.stt = STTEngine(event_bus)
+
+        self.sessions = {"default": [build_system_prompt(self.ai.model)]}
+        self.history = self.sessions["default"]
 
         # Wake Word Detector (uses Porcupine if key set, else local Whisper for 'creed')
         self.wake = WakeWordDetector(
@@ -84,14 +97,21 @@ class CreedEngine:
         self.tts.stop()
         self.stt.stop_listening()
 
-    def get_history(self, session_id: str = "default") -> list:
+    def get_history(self, session_id: str = "default", mode: str = "default") -> list:
+        if mode == "jee":
+            from modules.jee_tutor import build_jee_system_prompt, pick_reasoning_model
+            prompt_msg = build_jee_system_prompt(pick_reasoning_model(self.installed_model_names))
+        else:
+            prompt_msg = build_system_prompt(self.ai.model)
         if session_id not in self.sessions:
-            msgs = [SYSTEM_PROMPT.copy()]
+            msgs = [prompt_msg]
             memory_mod = self.modules.get("memory")
             if memory_mod:
                 for m in memory_mod.get_messages(session_id, limit=20):
                     msgs.append({"role": m["role"], "content": m["content"]})
             self.sessions[session_id] = msgs
+        else:
+            self.sessions[session_id][0] = prompt_msg
         return self.sessions[session_id]
 
     def initialize(self, loop):
@@ -102,6 +122,7 @@ class CreedEngine:
         event_bus.subscribe("wake_word_detected", self._on_wake_word)
         event_bus.subscribe("speech_transcribed", self._on_speech_transcribed)
         event_bus.subscribe("status_change", self._on_status_change)
+        event_bus.subscribe("vspotify_command", self._on_vspotify_command)
 
         def handle_wake():
             logger.info("Wake word callback triggered in detector thread")
@@ -158,9 +179,61 @@ class CreedEngine:
         notes = memory_mod.list_notes() if memory_mod else []
         reminders = memory_mod.list_reminders() if memory_mod else []
 
+        ollama_online = False
+        ollama_detail = "Not running ('ollama serve')"
+        ollama_models = []
+        try:
+            import httpx
+            tags_url = self.ai.endpoint.replace("/api/chat", "/api/tags")
+            r = httpx.get(tags_url, timeout=0.6)
+            if r.status_code == 200:
+                raw_models = r.json().get("models", [])
+                ollama_online = True
+                for m in raw_models:
+                    details = m.get("details") or {}
+                    size_bytes = m.get("size") or 0
+                    ollama_models.append(
+                        {
+                            "name": m.get("name", ""),
+                            "size_gb": round(size_bytes / (1024 ** 3), 1) if size_bytes else 0.0,
+                            "parameter_size": details.get("parameter_size", "—"),
+                            "quantization": details.get("quantization_level", "—"),
+                            "family": details.get("family", "—"),
+                        }
+                    )
+                names = [m["name"] for m in ollama_models]
+                self.installed_model_names = names
+                has_model = any(self.ai.model == n or self.ai.model in n for n in names)
+                ollama_detail = (
+                    f"{self.ai.model} ready"
+                    if has_model
+                    else f"Running (pull '{self.ai.model}')"
+                )
+        except Exception:
+            ollama_online = False
+
+        from pathlib import Path
+        from modules.jee_tutor import PYQ_VAULT, pick_reasoning_model
+
+        jee_model = pick_reasoning_model(self.installed_model_names)
+
+        vspotify_cmds = []
+        while self.vspotify_queue:
+            vspotify_cmds.append(self.vspotify_queue.popleft())
+
         return {
             "version": config.version,
             "model": self.ai.model,
+            "jee_model": jee_model,
+            "ollama_online": ollama_online,
+            "ollama_detail": ollama_detail,
+            "ollama_models": ollama_models,
+            "model_pull": dict(self.model_pull_status),
+            "vspotify_available": Path(config.vspotify_dir).exists(),
+            "vspotify_commands": vspotify_cmds,
+            "pyq_vault": PYQ_VAULT,
+            "jee_flashcards": memory_mod.list_flashcards() if memory_mod else [],
+            "jee_tests": memory_mod.list_jee_tests() if memory_mod else [],
             "uptime_seconds": int(time.monotonic() - self.start_time),
             "voice": {
                 "wake_word": (
@@ -180,9 +253,9 @@ class CreedEngine:
                 {
                     "id": "mac",
                     "name": "macOS Host",
-                    "description": "Local Apple Silicon control (apps, clipboard, battery/uptime).",
+                    "description": "Local Apple Silicon control (apps, files, Python runner, clipboard).",
                     "state": "Online",
-                    "detail": "Native open / pbcopy / pmset",
+                    "detail": "Native open / pbcopy / pmset / fs",
                 },
                 {
                     "id": "bluetooth",
@@ -206,8 +279,8 @@ class CreedEngine:
                     "id": "llm",
                     "name": "Local LLM (Ollama)",
                     "description": "Primary reasoning and tool-calling engine.",
-                    "state": "Configured",
-                    "detail": f"{self.ai.model} @ {self.ai.endpoint}",
+                    "state": "Online" if ollama_online else "Offline",
+                    "detail": ollama_detail,
                 },
             ],
             "tools": [
@@ -236,6 +309,75 @@ class CreedEngine:
                 "porcupine_configured": bool(config.porcupine_access_key),
             },
         }
+
+    async def pull_ollama_model(self, model_name: str):
+        import json
+        import httpx
+
+        model_name = model_name.strip()
+        if not model_name:
+            return
+        self.model_pull_status = {
+            "active": True,
+            "model": model_name,
+            "status": f"Starting pull for {model_name}...",
+            "percent": 0,
+            "error": "",
+        }
+        await self._emit_activity("LLM", f"Pulling Ollama model: {model_name}")
+        pull_url = self.ai.endpoint.replace("/api/chat", "/api/pull")
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST", pull_url, json={"name": model_name, "stream": True}
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if data.get("error"):
+                            raise RuntimeError(data["error"])
+                        total = data.get("total") or 0
+                        completed = data.get("completed") or 0
+                        pct = int((completed / total) * 100) if total > 0 else self.model_pull_status["percent"]
+                        self.model_pull_status = {
+                            "active": True,
+                            "model": model_name,
+                            "status": data.get("status", "downloading"),
+                            "percent": min(100, pct),
+                            "error": "",
+                        }
+            self.model_pull_status = {
+                "active": False,
+                "model": model_name,
+                "status": f"Ready: {model_name}",
+                "percent": 100,
+                "error": "",
+            }
+            await self._emit_activity("LLM", f"Model ready: {model_name}")
+        except Exception as e:
+            self.model_pull_status = {
+                "active": False,
+                "model": model_name,
+                "status": "error",
+                "percent": 0,
+                "error": str(e),
+            }
+            await self._emit_activity("LLM", f"Pull failed ({model_name}): {str(e)[:60]}")
+
+    async def delete_ollama_model(self, model_name: str) -> dict:
+        import httpx
+
+        delete_url = self.ai.endpoint.replace("/api/chat", "/api/delete")
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.request("DELETE", delete_url, json={"name": model_name})
+            resp.raise_for_status()
+        await self._emit_activity("LLM", f"Deleted model: {model_name}")
+        return {"status": "ok", "deleted": model_name}
 
     async def run_workflow(self, workflow_id: int = None, name: str = None) -> dict:
         memory_mod = self.modules.get("memory")
@@ -299,42 +441,49 @@ class CreedEngine:
         await self._emit_activity("VOICE", f"Transcribed: {text[:40]}")
         await self.process_text(text)
 
+    async def _on_vspotify_command(self, payload: dict):
+        self.vspotify_queue.append(payload)
+
     def _on_status_change(self, state: str):
         if state == "Idle":
             if not self.wake._running and not self.stt.recording:
                 logger.debug("[Engine] System Idle. Ensuring wake word detector is active.")
                 self.wake.start()
 
-    async def process_text(self, text: str, session_id: str = "default", history=None):
+    async def process_text(
+        self, text: str, session_id: str = "default", history=None, mode: str = "default"
+    ):
         if not text or not text.strip():
             return
 
         if history is None:
-            history = self.get_history(session_id)
+            history = self.get_history(session_id, mode=mode)
 
         self.wake.stop()
         self.stt.stop_listening()
         self.tts.stop()
 
         await event_bus.publish("status_change", "Processing")
-        await self._emit_activity("CONVERSATION", f"Prompt: {text[:45]}")
-        logger.info(f"Processing input [{session_id}]: '{text}'")
+        node_tag = "JEE" if mode == "jee" else "CONVERSATION"
+        await self._emit_activity(node_tag, f"Prompt: {text[:45]}")
+        logger.info(f"Processing input [{session_id}/{mode}]: '{text}'")
 
-        # 1. Fast intent router for exact built-in shortcuts
-        intent, module = self.router.dispatch(text)
-        if module:
-            logger.info(f"Routed intent '{intent}' to module '{module.name}'")
-            try:
-                response = module.handle(intent, text, self.context)
-                if response:
-                    node = "MEMORY" if module.name == "memory" else "SYSTEMS"
-                    await self._emit_activity(node, f"Handled '{intent}'")
-                    await event_bus.publish("llm_token", response)
-                    await event_bus.publish("llm_done")
-                    self.tts.speak(response)
-                    return
-            except Exception as e:
-                logger.error(f"Error executing module '{module.name}': {e}")
+        # 1. Fast intent router for exact built-in shortcuts (skip in JEE tutor mode)
+        if mode != "jee":
+            intent, module = self.router.dispatch(text)
+            if module:
+                logger.info(f"Routed intent '{intent}' to module '{module.name}'")
+                try:
+                    response = module.handle(intent, text, self.context)
+                    if response:
+                        node = "MEMORY" if module.name == "memory" else "SYSTEMS"
+                        await self._emit_activity(node, f"Handled '{intent}'")
+                        await event_bus.publish("llm_token", response)
+                        await event_bus.publish("llm_done")
+                        self.tts.speak(response)
+                        return
+                except Exception as e:
+                    logger.error(f"Error executing module '{module.name}': {e}")
 
         # 2. Check memories for RAG injection
         memory_module = self.modules.get("memory")
@@ -367,7 +516,13 @@ class CreedEngine:
 
         # 3. Multi-step Tool-Calling Agent Loop (Ollama)
         self._cancel_generation = False
-        tool_schemas = self.tools.get_ollama_schemas()
+        model_override = None
+        if mode == "jee":
+            from modules.jee_tutor import pick_reasoning_model
+            model_override = pick_reasoning_model(self.installed_model_names)
+            tool_schemas = None
+        else:
+            tool_schemas = self.tools.get_ollama_schemas()
         spoken_buffer = ""
         final_assistant_text = ""
 
@@ -379,7 +534,9 @@ class CreedEngine:
                 turn_text = ""
                 turn_tool_calls = []
 
-                async for event in self.ai.stream_turn(temp_history, tools=tool_schemas):
+                async for event in self.ai.stream_turn(
+                    temp_history, tools=tool_schemas, model_override=model_override
+                ):
                     if self._cancel_generation:
                         logger.info("LLM streaming cancelled by user.")
                         break
@@ -501,6 +658,7 @@ class CreedEngine:
         from modules.mac_control import register_tools as register_mac_tools
         from modules.bt_audio import register_tools as register_bt_tools
         from modules.phone_adb import register_tools as register_phone_tools
+        from modules.vspotify import register_tools as register_vspotify_tools
 
         memory = MemoryModule(self.lock)
         system = SystemModule(self.lock)
@@ -515,6 +673,7 @@ class CreedEngine:
         register_mac_tools(self.tools)
         register_bt_tools(self.tools)
         register_phone_tools(self.tools)
+        register_vspotify_tools(self.tools)
         register_memory_tools(self.tools, memory)
 
         async def _run_workflow_tool(name: str) -> str:

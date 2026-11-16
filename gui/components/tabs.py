@@ -3,14 +3,18 @@
 import json
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -52,8 +56,8 @@ class MemoryTab(QWidget):
 
         layout.addWidget(
             _make_header(
-                "MEMORY // CONVERSATIONS & KNOWLEDGE STORE",
-                "Switch between saved conversations, persistent notes, and scheduled reminders",
+                "Memory",
+                "Saved conversations, notes, and scheduled reminders",
             )
         )
 
@@ -241,7 +245,7 @@ class SystemsTab(QWidget):
         layout.setSpacing(12)
 
         top = QHBoxLayout()
-        top.addWidget(_make_header("SYSTEMS // CONNECTED ARCHITECTURE", "Real-time operational state of local and remote nodes"))
+        top.addWidget(_make_header("Systems", "Connected hardware and local services"))
         top.addStretch()
         refresh_btn = QPushButton("REFRESH")
         refresh_btn.setObjectName("secondary_btn")
@@ -297,7 +301,7 @@ class ToolsTab(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        layout.addWidget(_make_header("TOOLS // REGISTERED CAPABILITIES", "Live tool schemas exposed to Ollama and recent execution log"))
+        layout.addWidget(_make_header("Tools", "Capabilities available to CREED and recent runs"))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -360,7 +364,7 @@ class VoiceTab(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(12)
 
-        layout.addWidget(_make_header("VOICE // AUDIO & SPEECH PIPELINE", "Real microphone RMS activity, STT, TTS, and Wake-Word status"))
+        layout.addWidget(_make_header("Voice", "Microphone activity, wake word, and speech engines"))
 
         self.visualizer = VoiceIndicator(diameter=190)
         layout.addWidget(self.visualizer, alignment=Qt.AlignCenter)
@@ -417,8 +421,8 @@ class AutomationTab(QWidget):
 
         layout.addWidget(
             _make_header(
-                "AUTOMATION // CUSTOM WORKFLOWS",
-                "Run multi-step device workflows or schedule background tasks",
+                "Automation",
+                "Multi-step workflows and background reminders",
             )
         )
 
@@ -538,6 +542,236 @@ class AutomationTab(QWidget):
             self.wf_layout.insertWidget(self.wf_layout.count() - 1, card)
 
 
+MODEL_CATALOG = [
+    ("qwen2.5-coder:7b", "4.7 GB", "Coding, tool calling & scripts (Fast)"),
+    ("qwen3:8b", "5.2 GB", "General reasoning, math & logic (Fast)"),
+    ("deepseek-r1:8b", "4.9 GB", "Step-by-step reasoning & JEE prep"),
+    ("qwen2.5:14b", "9.0 GB", "Heavy coding & deep reasoning (16 GB)"),
+    ("llama3.1:8b", "4.9 GB", "General assistant & conversation"),
+    ("gemma2:9b", "5.4 GB", "Balanced writing & analysis"),
+]
+
+_TABLE_STYLE = (
+    "QTableWidget { background-color: #10151B; border: 1px solid #22303F; border-radius: 6px; "
+    "gridline-color: #1B2531; color: #E6EDF2; font-size: 11px; }"
+    "QHeaderView::section { background-color: #151C24; color: #8BAFBE; border: none; "
+    "border-bottom: 1px solid #22303F; padding: 6px; font-family: 'SF Mono', monospace; "
+    "font-size: 10px; font-weight: bold; }"
+    "QTableWidget::item { padding: 4px 6px; }"
+)
+
+
+class ModelsTab(QWidget):
+    select_model_requested = Signal(str)
+    pull_model_requested = Signal(str)
+    delete_model_requested = Signal(str)
+    refresh_requested = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._installed_names = set()
+        self._active_model = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        top = QHBoxLayout()
+        top.addWidget(
+            _make_header(
+                "AI Models",
+                "Switch active model or pull local weights via Ollama",
+            )
+        )
+        top.addStretch()
+        refresh_btn = QPushButton("REFRESH")
+        refresh_btn.setObjectName("secondary_btn")
+        refresh_btn.clicked.connect(self.refresh_requested.emit)
+        top.addWidget(refresh_btn)
+        layout.addLayout(top)
+
+        # Quick Switch Dropdown Bar
+        switch_card = QFrame()
+        switch_card.setObjectName("panel_card")
+        sw_lay = QHBoxLayout(switch_card)
+        sw_lay.setContentsMargins(12, 8, 12, 8)
+        sw_lay.setSpacing(8)
+
+        sw_lbl = QLabel("ACTIVE MODEL")
+        sw_lbl.setObjectName("section_header")
+        self.model_combo = QComboBox()
+        self.model_combo.setStyleSheet(
+            "background-color: #10151B; border: 1px solid #22303F; border-radius: 6px; padding: 6px 10px; color: #E6EDF2; font-family: 'SF Mono', monospace; font-size: 11px;"
+        )
+        switch_btn = QPushButton("ACTIVATE")
+        switch_btn.setObjectName("primary_btn")
+        switch_btn.clicked.connect(self._activate_combo)
+
+        sw_lay.addWidget(sw_lbl)
+        sw_lay.addWidget(self.model_combo, 1)
+        sw_lay.addWidget(switch_btn)
+        layout.addWidget(switch_card)
+
+        # Installed Models Table
+        inst_hdr = QLabel("INSTALLED OLLAMA MODELS")
+        inst_hdr.setObjectName("section_header")
+        layout.addWidget(inst_hdr)
+
+        self.installed_table = QTableWidget(0, 6)
+        self.installed_table.setHorizontalHeaderLabels(
+            ["MODEL", "PARAMS", "QUANT", "SIZE", "STATUS", "ACTION"]
+        )
+        self.installed_table.setStyleSheet(_TABLE_STYLE)
+        self.installed_table.verticalHeader().setVisible(False)
+        self.installed_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.installed_table.setSelectionMode(QAbstractItemView.NoSelection)
+        hdr = self.installed_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in (1, 2, 3, 4):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.installed_table.setColumnWidth(5, 130)
+        self.installed_table.setMinimumHeight(140)
+        layout.addWidget(self.installed_table, 1)
+
+        # Pull / Download Table + Custom Pull
+        cat_hdr = QLabel("DOWNLOAD / PULL MODELS")
+        cat_hdr.setObjectName("section_header")
+        layout.addWidget(cat_hdr)
+
+        pull_row = QHBoxLayout()
+        self.custom_pull_input = QLineEdit()
+        self.custom_pull_input.setPlaceholderText("Pull any Ollama tag (e.g. mistral:7b, qwen2.5-coder:14b)...")
+        pull_btn = QPushButton("↓ PULL MODEL")
+        pull_btn.setObjectName("primary_btn")
+        pull_btn.clicked.connect(self._pull_custom)
+        pull_row.addWidget(self.custom_pull_input, 1)
+        pull_row.addWidget(pull_btn)
+        layout.addLayout(pull_row)
+
+        self.pull_status_label = QLabel("Ready.")
+        self.pull_status_label.setObjectName("meta_label")
+        layout.addWidget(self.pull_status_label)
+
+        self.catalog_table = QTableWidget(len(MODEL_CATALOG), 4)
+        self.catalog_table.setHorizontalHeaderLabels(
+            ["MODEL", "SIZE", "BEST FOR", "ACTION"]
+        )
+        self.catalog_table.setStyleSheet(_TABLE_STYLE)
+        self.catalog_table.verticalHeader().setVisible(False)
+        self.catalog_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.catalog_table.setSelectionMode(QAbstractItemView.NoSelection)
+        chdr = self.catalog_table.horizontalHeader()
+        chdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        chdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        chdr.setSectionResizeMode(2, QHeaderView.Stretch)
+        chdr.setSectionResizeMode(3, QHeaderView.Fixed)
+        self.catalog_table.setColumnWidth(3, 110)
+        self.catalog_table.setMinimumHeight(170)
+        layout.addWidget(self.catalog_table, 1)
+
+    def _activate_combo(self):
+        model = self.model_combo.currentText().strip()
+        if model:
+            self.select_model_requested.emit(model)
+
+    def _pull_custom(self):
+        model = self.custom_pull_input.text().strip()
+        if model:
+            self.pull_model_requested.emit(model)
+            self.custom_pull_input.clear()
+
+    def update_data(self, active_model: str, models: list, pull_info: dict, ollama_online: bool):
+        self._active_model = active_model or ""
+        self._installed_names = {m.get("name", "") for m in models}
+
+        # Update dropdown without clobbering user interaction
+        if not self.model_combo.view().isVisible():
+            current_items = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+            target_items = [m.get("name", "") for m in models if m.get("name")]
+            if active_model and active_model not in target_items:
+                target_items.insert(0, active_model)
+            if current_items != target_items:
+                self.model_combo.clear()
+                self.model_combo.addItems(target_items)
+            idx = self.model_combo.findText(active_model)
+            if idx >= 0:
+                self.model_combo.setCurrentIndex(idx)
+
+        # Installed Models Table
+        self.installed_table.setRowCount(len(models))
+        for row, m in enumerate(models):
+            name = m.get("name", "")
+            is_active = name == active_model
+            self.installed_table.setRowHeight(row, 34)
+            self.installed_table.setItem(row, 0, QTableWidgetItem(name))
+            self.installed_table.setItem(row, 1, QTableWidgetItem(str(m.get("parameter_size", "—"))))
+            self.installed_table.setItem(row, 2, QTableWidgetItem(str(m.get("quantization", "—"))))
+            self.installed_table.setItem(row, 3, QTableWidgetItem(f"{m.get('size_gb', 0.0)} GB"))
+
+            status_item = QTableWidgetItem("● ACTIVE" if is_active else "READY")
+            status_item.setForeground(Qt.green if is_active else Qt.cyan)
+            self.installed_table.setItem(row, 4, status_item)
+
+            action_box = QWidget()
+            h = QHBoxLayout(action_box)
+            h.setContentsMargins(4, 2, 4, 2)
+            h.setSpacing(4)
+
+            use_btn = QPushButton("ACTIVE" if is_active else "USE")
+            use_btn.setObjectName("primary_btn" if not is_active else "secondary_btn")
+            use_btn.setEnabled(not is_active)
+            use_btn.clicked.connect(lambda checked=False, n=name: self.select_model_requested.emit(n))
+
+            del_btn = QPushButton("✕")
+            del_btn.setObjectName("secondary_btn")
+            del_btn.setFixedWidth(28)
+            del_btn.setEnabled(not is_active)
+            del_btn.clicked.connect(lambda checked=False, n=name: self.delete_model_requested.emit(n))
+
+            h.addWidget(use_btn)
+            h.addWidget(del_btn)
+            self.installed_table.setCellWidget(row, 5, action_box)
+
+        # Pull status label
+        if not ollama_online:
+            self.pull_status_label.setText("Ollama is offline. Run 'ollama serve' to list or pull models.")
+            self.pull_status_label.setStyleSheet("color: #EF4444; font-size: 11px;")
+        elif pull_info.get("active"):
+            self.pull_status_label.setText(
+                f"Pulling {pull_info.get('model')}: {pull_info.get('status')} ({pull_info.get('percent', 0)}%)"
+            )
+            self.pull_status_label.setStyleSheet("color: #56D9E8; font-size: 11px;")
+        elif pull_info.get("error"):
+            self.pull_status_label.setText(f"Pull failed: {pull_info.get('error')}")
+            self.pull_status_label.setStyleSheet("color: #EF4444; font-size: 11px;")
+        elif pull_info.get("status") not in ("", "idle"):
+            self.pull_status_label.setText(str(pull_info.get("status")))
+            self.pull_status_label.setStyleSheet("color: #22C55E; font-size: 11px;")
+        else:
+            self.pull_status_label.setText("Ready to pull from Ollama library.")
+            self.pull_status_label.setStyleSheet("color: #65727F; font-size: 11px;")
+
+        # Catalog Table
+        for row, (name, size_str, desc) in enumerate(MODEL_CATALOG):
+            self.catalog_table.setRowHeight(row, 34)
+            self.catalog_table.setItem(row, 0, QTableWidgetItem(name))
+            self.catalog_table.setItem(row, 1, QTableWidgetItem(size_str))
+            self.catalog_table.setItem(row, 2, QTableWidgetItem(desc))
+
+            installed = name in self._installed_names
+            btn = QPushButton("INSTALLED" if installed else "INSTALL")
+            btn.setObjectName("secondary_btn" if installed else "primary_btn")
+            btn.setEnabled(not installed and ollama_online and not pull_info.get("active"))
+            btn.clicked.connect(lambda checked=False, n=name: self.pull_model_requested.emit(n))
+
+            wrap = QWidget()
+            hl = QHBoxLayout(wrap)
+            hl.setContentsMargins(4, 2, 4, 2)
+            hl.addWidget(btn)
+            self.catalog_table.setCellWidget(row, 3, wrap)
+
+
 class SettingsTab(QWidget):
     save_requested = Signal(dict)
     restart_gui_requested = Signal()
@@ -548,7 +782,7 @@ class SettingsTab(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        layout.addWidget(_make_header("SETTINGS // ENVIRONMENT CONFIGURATION", "Reads from and writes to .env"))
+        layout.addWidget(_make_header("Settings", "Environment preferences stored in .env"))
 
         form = QFrame()
         form.setObjectName("panel_card")
@@ -556,7 +790,11 @@ class SettingsTab(QWidget):
         g.setContentsMargins(14, 14, 14, 14)
         g.setSpacing(10)
 
-        self.model_input = QLineEdit()
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setStyleSheet(
+            "background-color: #10151B; border: 1px solid #22303F; border-radius: 6px; padding: 6px 10px; color: #E6EDF2;"
+        )
         self.endpoint_input = QLineEdit()
         self.voice_input = QLineEdit()
         self.rate_input = QLineEdit()
@@ -565,7 +803,7 @@ class SettingsTab(QWidget):
         self.porcupine_status.setObjectName("meta_label")
 
         rows = [
-            ("Ollama Model", self.model_input),
+            ("Ollama Model", self.model_combo),
             ("Ollama Endpoint", self.endpoint_input),
             ("macOS TTS Voice", self.voice_input),
             ("TTS Rate (WPM)", self.rate_input),
@@ -595,9 +833,17 @@ class SettingsTab(QWidget):
         layout.addLayout(btn_row)
         layout.addStretch()
 
-    def update_data(self, cfg: dict):
-        if not self.model_input.hasFocus():
-            self.model_input.setText(cfg.get("ollama_model", ""))
+    def update_data(self, cfg: dict, models: list = None):
+        if not self.model_combo.hasFocus() and not self.model_combo.view().isVisible():
+            model_names = [m.get("name", "") for m in (models or []) if m.get("name")]
+            active = cfg.get("ollama_model", "")
+            if active and active not in model_names:
+                model_names.insert(0, active)
+            existing = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+            if existing != model_names and model_names:
+                self.model_combo.clear()
+                self.model_combo.addItems(model_names)
+            self.model_combo.setCurrentText(active)
         if not self.endpoint_input.hasFocus():
             self.endpoint_input.setText(cfg.get("ollama_endpoint", ""))
         if not self.voice_input.hasFocus():
@@ -613,7 +859,7 @@ class SettingsTab(QWidget):
     def _emit_save(self):
         self.save_requested.emit(
             {
-                "ollama_model": self.model_input.text().strip(),
+                "ollama_model": self.model_combo.currentText().strip(),
                 "ollama_endpoint": self.endpoint_input.text().strip(),
                 "macos_tts_voice": self.voice_input.text().strip(),
                 "macos_tts_rate": self.rate_input.text().strip(),

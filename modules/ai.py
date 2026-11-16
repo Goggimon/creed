@@ -54,9 +54,10 @@ class Module(BaseAIProvider):
                 yield event["text"]
 
     async def stream_turn(
-        self, history: list, tools: Optional[list] = None
+        self, history: list, tools: Optional[list] = None, model_override: Optional[str] = None
     ) -> AsyncGenerator[dict, None]:
-        payload = {"model": self.model, "messages": history, "stream": True}
+        active_model = model_override or self.model
+        payload = {"model": active_model, "messages": history, "stream": True}
         if tools:
             payload["tools"] = tools
 

@@ -4,12 +4,11 @@ import os
 import sys
 from datetime import datetime
 import httpx
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QRadialGradient
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QPainter, QRadialGradient
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
-    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -32,33 +31,34 @@ from components.status_bar import STATE_COLORS, StatusBar
 from components.tabs import (
     AutomationTab,
     MemoryTab,
+    ModelsTab,
     SettingsTab,
     SystemsTab,
     ToolsTab,
     VoiceTab,
 )
+from components.vspotify_tab import VSpotifyTab
+from components.jee_tab import JEETutorTab
 
 
 class TechWorkspaceFrame(QFrame):
-    """Workspace container with subtle Swiss micro-grid and radial cyan glow."""
+    """Clean studio workspace container with subtle top-center ambient glow."""
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
+        painter = QPainter()
+        if not painter.begin(self):
+            return
+        try:
+            painter.setRenderHint(QPainter.Antialiasing)
+            w, h = self.width(), self.height()
 
-        grad = QRadialGradient(w * 0.5, h * 0.45, max(w, h) * 0.65)
-        grad.setColorAt(0.0, QColor(14, 34, 44, 75))
-        grad.setColorAt(1.0, QColor(8, 11, 15, 0))
-        painter.fillRect(0, 0, w, h, grad)
-
-        step = 42
-        painter.setPen(QPen(QColor(86, 217, 232, 9), 1.0))
-        for x in range(0, w, step):
-            painter.drawLine(x, 0, x, h)
-        for y in range(0, h, step):
-            painter.drawLine(0, y, w, y)
+            grad = QRadialGradient(w * 0.5, h * 0.25, max(w, h) * 0.6)
+            grad.setColorAt(0.0, QColor(96, 165, 250, 14))
+            grad.setColorAt(1.0, QColor(16, 17, 20, 0))
+            painter.fillRect(0, 0, w, h, grad)
+        finally:
+            painter.end()
 
 
 class ConnectionOverlay(QFrame):
@@ -103,13 +103,14 @@ class ApiWorker(QThread):
 
     def run(self):
         base = "http://localhost:8000"
+        req_timeout = 95.0 if self.tag == "jee_test" else 10.0
         try:
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(timeout=req_timeout) as client:
                 resp = client.request(self.method, f"{base}{self.path}", json=self.payload)
                 resp.raise_for_status()
                 data = resp.json()
                 self.response_ready.emit(self.tag, data)
-                if self.tag not in ("snapshot", "load_convo"):
+                if self.tag not in ("snapshot", "load_convo", "jee_test"):
                     snap = client.get(f"{base}/api/snapshot")
                     snap.raise_for_status()
                     self.response_ready.emit("snapshot", snap.json())
@@ -135,6 +136,7 @@ class MainWindow(QMainWindow):
         self._is_connected = False
         self._history_loaded = False
         self._current_session_id = "default"
+        self._active_chat_target = "default"
 
         self.init_ui()
         self.apply_styles()
@@ -191,9 +193,9 @@ class MainWindow(QMainWindow):
         self.top_insignia = CreedInsigniaWidget(size=24)
         self.title_label = QLabel("CREED")
         self.title_label.setObjectName("tab_title")
-        self.version_label = QLabel("v2.1.0")
+        self.version_label = QLabel("v3.0.0")
         self.version_label.setObjectName("meta_label")
-        self.top_status_pill = QLabel("● RETRYING CONNECTION")
+        self.top_status_pill = QLabel("● Connecting")
         self.top_status_pill.setObjectName("accent_label")
 
         self.clock_label = QLabel("")
@@ -250,7 +252,7 @@ class MainWindow(QMainWindow):
         brand_title = QLabel("CREED")
         brand_title.setObjectName("tab_title")
         brand_title.setAlignment(Qt.AlignCenter)
-        brand_sub = QLabel("MULTI-SYSTEM AGENT")
+        brand_sub = QLabel("Local Mac Agent")
         brand_sub.setObjectName("meta_label")
         brand_sub.setAlignment(Qt.AlignCenter)
         brand_box.addWidget(self.side_insignia, alignment=Qt.AlignCenter)
@@ -261,14 +263,17 @@ class MainWindow(QMainWindow):
 
         self.nav_buttons = []
         nav_items = [
-            ("⌂  Overview", 0),
-            ("◈  Conversation", 1),
-            ("▤  Memory", 2),
-            ("❖  Systems", 3),
-            ("⚙  Tools", 4),
-            ("◉  Voice", 5),
-            ("⚡  Automation", 6),
-            ("☰  Settings", 7),
+            ("Overview", 0),
+            ("Conversation", 1),
+            ("Memory", 2),
+            ("VSpotify", 3),
+            ("JEE Tutor", 4),
+            ("Voice", 5),
+            ("Automation", 6),
+            ("Systems", 7),
+            ("Tools", 8),
+            ("AI Models", 9),
+            ("Settings", 10),
         ]
         for label, idx in nav_items:
             btn = QPushButton(label)
@@ -284,7 +289,7 @@ class MainWindow(QMainWindow):
         uptime_card.setObjectName("panel_card")
         up_lay = QVBoxLayout(uptime_card)
         up_lay.setContentsMargins(10, 8, 10, 8)
-        up_hdr = QLabel("SYSTEM UPTIME")
+        up_hdr = QLabel("Uptime")
         up_hdr.setObjectName("section_header")
         self.uptime_value = QLabel("00:00:00")
         self.uptime_value.setObjectName("accent_label")
@@ -299,22 +304,20 @@ class MainWindow(QMainWindow):
         ws_layout.setContentsMargins(0, 0, 0, 0)
 
         self.stack = QStackedWidget()
-        self._stack_opacity = QGraphicsOpacityEffect(self.stack)
-        self.stack.setGraphicsEffect(self._stack_opacity)
-        self._stack_anim = QPropertyAnimation(self._stack_opacity, b"opacity", self)
-        self._stack_anim.setDuration(180)
-        self._stack_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._stack_slide = QPropertyAnimation(self.stack, b"pos", self)
+        self._stack_slide.setDuration(190)
+        self._stack_slide.setEasingCurve(QEasingCurve.OutCubic)
         ws_layout.addWidget(self.stack)
 
         self.connection_overlay = ConnectionOverlay(self.workspace_frame)
 
-        # Tab 0: Overview (Native 60 FPS 3D-Projected Amber Holographic Sphere + Command Bar)
+        # Tab 0: Overview (Native 60 FPS 3D-Projected Sphere + Command Bar)
         overview_page = QWidget()
         ov_lay = QVBoxLayout(overview_page)
         ov_lay.setContentsMargins(12, 10, 12, 10)
         ov_lay.setSpacing(6)
 
-        ov_hdr = QLabel("CREED // CENTRAL INTELLIGENCE HUB")
+        ov_hdr = QLabel("Intelligence Hub")
         ov_hdr.setObjectName("section_header")
 
         self.web_visualizer = None
@@ -377,18 +380,39 @@ class MainWindow(QMainWindow):
         self.automation_tab.create_workflow_requested.connect(self.create_workflow)
         self.automation_tab.delete_workflow_requested.connect(self.delete_workflow)
 
+        self.models_tab = ModelsTab()
+        self.models_tab.select_model_requested.connect(self.select_model)
+        self.models_tab.pull_model_requested.connect(self.pull_model)
+        self.models_tab.delete_model_requested.connect(self.delete_model)
+        self.models_tab.refresh_requested.connect(self.fetch_snapshot)
+
         self.settings_tab = SettingsTab()
         self.settings_tab.save_requested.connect(self.save_settings)
         self.settings_tab.restart_gui_requested.connect(self.restart_gui)
+
+        self.vspotify_tab = VSpotifyTab()
+
+        self.jee_tab = JEETutorTab()
+        self.jee_tab.jee_prompt_submitted.connect(self.handle_jee_send)
+        self.jee_tab.voice_requested.connect(self.handle_voice_toggle)
+        self.jee_tab.stop_requested.connect(self.stop_generation)
+        self.jee_tab.add_flashcard_requested.connect(self.add_jee_flashcard)
+        self.jee_tab.toggle_flashcard_requested.connect(self.toggle_jee_flashcard)
+        self.jee_tab.delete_flashcard_requested.connect(self.delete_jee_flashcard)
+        self.jee_tab.generate_test_requested.connect(self.generate_jee_test)
+        self.jee_tab.submit_test_requested.connect(self.submit_jee_test)
 
         for page in (
             overview_page,
             conv_page,
             self.memory_tab,
-            self.systems_tab,
-            self.tools_tab,
+            self.vspotify_tab,
+            self.jee_tab,
             self.voice_tab,
             self.automation_tab,
+            self.systems_tab,
+            self.tools_tab,
+            self.models_tab,
             self.settings_tab,
         ):
             self.stack.addWidget(page)
@@ -436,15 +460,17 @@ class MainWindow(QMainWindow):
     def switch_tab(self, index: int):
         if self.stack.currentIndex() != index:
             self.stack.setCurrentIndex(index)
-            self._stack_anim.stop()
-            self._stack_anim.setStartValue(0.45)
-            self._stack_anim.setEndValue(1.0)
-            self._stack_anim.start()
+            self._stack_slide.stop()
+            self._stack_slide.setStartValue(QPoint(0, 10))
+            self._stack_slide.setEndValue(QPoint(0, 0))
+            self._stack_slide.start()
         for idx, btn in enumerate(self.nav_buttons):
             btn.setProperty("active", "true" if idx == index else "false")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
-        if index in (2, 3, 4, 5, 6, 7) and self._is_connected:
+        if index == 3 and self._is_connected:
+            self.vspotify_tab.ensure_loaded()
+        if index in (2, 3, 4, 5, 6, 7, 8, 9, 10) and self._is_connected:
             self.fetch_snapshot()
 
     def _on_visualizer_title(self, title: str):
@@ -457,9 +483,20 @@ class MainWindow(QMainWindow):
 
     def toggle_right_panel(self):
         self._right_collapsed = not self._right_collapsed
-        self.right_panel.setVisible(not self._right_collapsed)
         self.collapse_right_btn.setText("PANEL ◂" if self._right_collapsed else "PANEL ▸")
-        QTimer.singleShot(10, lambda: self.connection_overlay.setGeometry(self.workspace_frame.rect()))
+        self._panel_anim = QPropertyAnimation(self.right_panel, b"maximumWidth", self)
+        self._panel_anim.setDuration(240)
+        self._panel_anim.setEasingCurve(QEasingCurve.OutCubic)
+        if self._right_collapsed:
+            self._panel_anim.setStartValue(self.right_panel.width())
+            self._panel_anim.setEndValue(0)
+            self._panel_anim.finished.connect(lambda: self.right_panel.setVisible(False))
+        else:
+            self.right_panel.setVisible(True)
+            self._panel_anim.setStartValue(0)
+            self._panel_anim.setEndValue(290)
+        self._panel_anim.start()
+        QTimer.singleShot(250, lambda: self.connection_overlay.setGeometry(self.workspace_frame.rect()))
 
     def apply_styles(self):
         try:
@@ -510,6 +547,8 @@ class MainWindow(QMainWindow):
             self.chat_view.clear_bubbles()
             self.current_ai_bubble = None
             self.switch_tab(1)
+        elif tag == "jee_test":
+            self.jee_tab.load_generated_test(data)
 
     def fetch_snapshot(self):
         if self._is_connected:
@@ -554,19 +593,81 @@ class MainWindow(QMainWindow):
     def save_settings(self, cfg: dict):
         self._run_api("POST", "/api/settings", cfg, tag="mutate")
 
+    def select_model(self, model: str):
+        self._run_api("POST", "/api/models/select", {"model": model}, tag="mutate")
+
+    def pull_model(self, model: str):
+        self._snapshot_timer.setInterval(1200)
+        self._run_api("POST", "/api/models/pull", {"model": model}, tag="mutate")
+
+    def delete_model(self, model: str):
+        self._run_api("POST", "/api/models/delete", {"model": model}, tag="mutate")
+
+    def add_jee_flashcard(self, subject: str, chapter: str, front: str, back: str):
+        self._run_api(
+            "POST",
+            "/api/jee/flashcards",
+            {"subject": subject, "chapter": chapter, "front": front, "back": back},
+            tag="mutate",
+        )
+
+    def toggle_jee_flashcard(self, card_id: int):
+        self._run_api("POST", f"/api/jee/flashcards/{card_id}/toggle", tag="mutate")
+
+    def delete_jee_flashcard(self, card_id: int):
+        self._run_api("DELETE", f"/api/jee/flashcards/{card_id}", tag="mutate")
+
+    def generate_jee_test(self, subject: str, chapter: str, difficulty: str, count: int):
+        self._run_api(
+            "POST",
+            "/api/jee/test/generate",
+            {"subject": subject, "chapter": chapter, "difficulty": difficulty, "count": count},
+            tag="jee_test",
+        )
+
+    def submit_jee_test(self, subject: str, difficulty: str, score: int, total: int):
+        self._run_api(
+            "POST",
+            "/api/jee/test/submit",
+            {"subject": subject, "difficulty": difficulty, "score": score, "total": total},
+            tag="mutate",
+        )
+
     def on_snapshot_received(self, data: dict):
-        self.version_label.setText(f"v{data.get('version', '2.0.0')}")
+        self.version_label.setText(f"v{data.get('version', '3.0.0')}")
         self._uptime_seconds = int(data.get("uptime_seconds", self._uptime_seconds))
         self.uptime_value.setText(self._format_uptime(self._uptime_seconds))
 
         tools = data.get("tools", [])
+        ollama_models = data.get("ollama_models", [])
+        pull_info = data.get("model_pull", {})
+        if pull_info.get("active"):
+            if self._snapshot_timer.interval() != 1200:
+                self._snapshot_timer.setInterval(1200)
+        elif self._snapshot_timer.interval() != 5000:
+            self._snapshot_timer.setInterval(5000)
+
         self.status_bar.update_snapshot(data)
         self.memory_tab.update_data(data.get("memory", {}), data.get("conversations", []))
         self.systems_tab.update_data(data.get("systems", []))
         self.tools_tab.update_data(tools, data.get("tool_history", []))
         self.voice_tab.update_data(data.get("voice", {}))
         self.automation_tab.update_data(data.get("workflows", []), tools)
-        self.settings_tab.update_data(data.get("config", {}))
+        self.models_tab.update_data(
+            data.get("model", ""),
+            ollama_models,
+            pull_info,
+            data.get("ollama_online", False),
+        )
+        self.settings_tab.update_data(data.get("config", {}), ollama_models)
+        self.jee_tab.update_data(data)
+
+        for cmd in data.get("vspotify_commands", []):
+            act = cmd.get("action", "")
+            if act == "open_tab":
+                self.switch_tab(3)
+            elif act:
+                self.vspotify_tab.execute_command(act, cmd.get("params", {}))
 
         if not self._history_loaded:
             self._history_loaded = True
@@ -594,6 +695,12 @@ class MainWindow(QMainWindow):
             self.move(self.x() + delta.x(), self.y() + delta.y())
             self._old_pos = event.globalPosition().toPoint()
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            pos = event.position().toPoint()
+            if pos.y() <= self.title_bar.height() + 14:
+                self.toggle_fullscreen()
+
     def mouseReleaseEvent(self, event):
         self._old_pos = None
 
@@ -605,12 +712,19 @@ class MainWindow(QMainWindow):
         self.handle_send(text)
 
     def handle_send(self, text: str):
+        self._active_chat_target = "default"
         self.chat_view.add_bubble(text, True)
         self.current_ai_bubble = self.chat_view.add_bubble("", False)
         if self.radial_hub:
             self.radial_hub.pulse_node("CONVERSATION")
         self.ws_worker.send_message(
             {"type": "chat", "text": text, "session_id": self._current_session_id}
+        )
+
+    def handle_jee_send(self, text: str):
+        self._active_chat_target = "jee"
+        self.ws_worker.send_message(
+            {"type": "chat", "text": text, "session_id": "jee-tutor", "mode": "jee"}
         )
 
     def handle_voice_toggle(self):
@@ -622,12 +736,17 @@ class MainWindow(QMainWindow):
         self.ws_worker.send_message({"type": "stop"})
 
     def append_token(self, token: str):
+        if self._active_chat_target == "jee":
+            self.jee_tab.append_token(token)
+            return
         if self.current_ai_bubble is None:
             self.current_ai_bubble = self.chat_view.add_bubble("", False)
         self.current_ai_bubble.append_text(token)
         self.chat_view.scroll_to_bottom()
 
     def on_response_done(self):
+        if self._active_chat_target == "jee":
+            self.jee_tab.finish_turn()
         self.current_ai_bubble = None
         self.fetch_snapshot()
 
