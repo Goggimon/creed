@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from worker import WebSocketWorker
 from components.chat_view import ChatView
 from components.command_palette import CommandPalette
+from components.global_hotkey import MacGlobalHotkey
 from components.input_bar import InputBar
 from components.jee_tab import JEETutorTab
 from components.radial_hub import CORE_STATE_THEMES, RadialHubWidget
@@ -176,6 +177,10 @@ class MainWindow(QMainWindow):
         self._snapshot_timer.setInterval(5000)
         self._snapshot_timer.timeout.connect(self.fetch_snapshot)
         self._snapshot_timer.start()
+
+        self.global_hotkey = MacGlobalHotkey(self)
+        self.global_hotkey.triggered.connect(self.summon_spotlight)
+        self.global_hotkey.start()
 
     def init_ui(self):
         self.central = QWidget()
@@ -439,6 +444,14 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "connection_overlay") and hasattr(self, "workspace_frame"):
             self.connection_overlay.setGeometry(self.workspace_frame.rect())
+
+    def summon_spotlight(self):
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.open_command_palette()
 
     def open_command_palette(self):
         self.command_palette.show_centered()
@@ -764,6 +777,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._clock_timer.stop()
         self._snapshot_timer.stop()
+        self.global_hotkey.stop()
+        self.global_hotkey.wait(250)
         self.ws_worker.stop()
         self.ws_worker.wait(300)
         for w in list(self._active_api_workers):

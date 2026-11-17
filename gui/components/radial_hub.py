@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass, field
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QBrush,
     QColor,
     QFont,
     QPainter,
