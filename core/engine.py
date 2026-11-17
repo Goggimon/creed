@@ -213,7 +213,7 @@ class CreedEngine:
             ollama_online = False
 
         from pathlib import Path
-        from modules.jee_tutor import PYQ_VAULT, pick_reasoning_model
+        from modules.jee_tutor import PYQ_VAULT, SVG_TEMPLATES, pick_reasoning_model
 
         jee_model = pick_reasoning_model(self.installed_model_names)
 
@@ -232,6 +232,7 @@ class CreedEngine:
             "vspotify_available": Path(config.vspotify_dir).exists(),
             "vspotify_commands": vspotify_cmds,
             "pyq_vault": PYQ_VAULT,
+            "svg_templates": SVG_TEMPLATES,
             "jee_flashcards": memory_mod.list_flashcards() if memory_mod else [],
             "jee_tests": memory_mod.list_jee_tests() if memory_mod else [],
             "uptime_seconds": int(time.monotonic() - self.start_time),
@@ -502,16 +503,19 @@ class CreedEngine:
             memory_module.save_message(session_id, "user", text)
 
         temp_history = history.copy()
+        extra_blocks = []
+        if mode == "jee":
+            from modules.jee_tutor import retrieve_jee_context
+            jee_ctx = retrieve_jee_context(text)
+            if jee_ctx:
+                extra_blocks.append(f"[Pre-loaded JEE Formula & Trap Reference]\n{jee_ctx}")
         if context_memories:
+            extra_blocks.append(f"[Context memories to help answer the user]\n{context_memories}")
+        if extra_blocks:
             latest_msg = temp_history[-1]["content"]
             temp_history[-1] = {
                 "role": "user",
-                "content": (
-                    f"[Context memories to help answer the user]\n"
-                    f"{context_memories}\n"
-                    f"[End of memories]\n\n"
-                    f"User: {latest_msg}"
-                ),
+                "content": "\n\n".join(extra_blocks) + f"\n\nUser: {latest_msg}",
             }
 
         # 3. Multi-step Tool-Calling Agent Loop (Ollama)

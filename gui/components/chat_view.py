@@ -95,11 +95,11 @@ def _markdown_to_html(raw: str) -> str:
                 f"font-weight:600;'>{html.escape(lang or 'code')}</div>"
             )
             rendered.append(
-                f"<div style='background:#0E0F12; border:1px solid rgba(255,255,255,0.08); "
+                f"<div style='background:#0B0A0E; border:1px solid rgba(255,244,224,0.09); "
                 f"border-radius:8px; padding:10px 12px; margin:6px 0;'>"
                 f"{header}"
-                f"<pre style='margin:0; font-family:\"SF Mono\",Menlo,monospace; "
-                f"font-size:12px; color:#93C5FD; white-space:pre-wrap;'>{escaped_code}</pre>"
+                f"<pre style='margin:0; font-family:\"Menlo\",monospace; "
+                f"font-size:12px; color:#F2C678; white-space:pre-wrap;'>{escaped_code}</pre>"
                 f"</div>"
             )
         else:
@@ -118,8 +118,8 @@ def _markdown_to_html(raw: str) -> str:
                     esc = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)
                     esc = re.sub(
                         r"`([^`\n]+)`",
-                        r"<code style='background:#0E0F12; color:#93C5FD; padding:1px 5px; "
-                        r"border-radius:4px; font-family:\"SF Mono\",Menlo,monospace; font-size:11.5px;'>\1</code>",
+                        r"<code style='background:#0B0A0E; color:#F2C678; padding:1px 5px; "
+                        r"border-radius:4px; font-family:\"Menlo\",monospace; font-size:11.5px;'>\1</code>",
                         esc,
                     )
                     esc = esc.replace("\n", "<br>")
@@ -143,7 +143,7 @@ class ChatBubble(QFrame):
         bubble_layout.setContentsMargins(14, 10, 14, 10)
         bubble_layout.setSpacing(4)
 
-        role_lbl = QLabel("You" if is_user else "CREED")
+        role_lbl = QLabel("OPERATOR // YOU" if is_user else "CREED // NEURAL CORE")
         role_lbl.setObjectName("msg_role_user" if is_user else "msg_role_ai")
         bubble_layout.addWidget(role_lbl)
 
@@ -205,16 +205,22 @@ class ChatView(QScrollArea):
         self.scroll_to_bottom()
 
     def scroll_to_bottom(self):
-        QTimer.singleShot(15, self._apply_scroll)
+        QTimer.singleShot(12, self._apply_scroll)
 
     def _apply_scroll(self):
         scrollbar = self.verticalScrollBar()
         target = scrollbar.maximum()
-        if scrollbar.value() == target:
+        if scrollbar.value() >= target - 2:
             return
-        self._scroll_anim = QPropertyAnimation(scrollbar, b"value", self)
-        self._scroll_anim.setDuration(140)
+        if self._scroll_anim is None:
+            self._scroll_anim = QPropertyAnimation(scrollbar, b"value", self)
+            self._scroll_anim.setDuration(120)
+            self._scroll_anim.setEasingCurve(QEasingCurve.OutCubic)
+        if target - scrollbar.value() < 48:
+            self._scroll_anim.stop()
+            scrollbar.setValue(target)
+            return
+        self._scroll_anim.stop()
         self._scroll_anim.setStartValue(scrollbar.value())
         self._scroll_anim.setEndValue(target)
-        self._scroll_anim.setEasingCurve(QEasingCurve.OutCubic)
         self._scroll_anim.start()

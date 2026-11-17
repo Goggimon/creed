@@ -21,11 +21,17 @@ from PySide6.QtWidgets import (
 from components.voice_indicator import VoiceIndicator
 
 
-def _make_header(title: str, subtitle: str = "") -> QWidget:
+def _make_header(title: str, subtitle: str = "", sys_tag: str = "", accent: str = "#67E8F9") -> QWidget:
     box = QWidget()
     lay = QVBoxLayout(box)
     lay.setContentsMargins(0, 0, 0, 6)
     lay.setSpacing(2)
+    if sys_tag:
+        tag = QLabel(sys_tag)
+        tag.setStyleSheet(
+            f"color: {accent}; font-family: 'Menlo', monospace; font-size: 10px; font-weight: 700; letter-spacing: 1px;"
+        )
+        lay.addWidget(tag)
     t = QLabel(title)
     t.setObjectName("tab_title")
     lay.addWidget(t)
@@ -51,43 +57,60 @@ class MemoryTab(QWidget):
         self._conversations = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
 
         layout.addWidget(
             _make_header(
-                "Memory",
-                "Saved conversations, notes, and scheduled reminders",
+                "Knowledge Architecture",
+                "Structured conversation index, tagged memory store, and scheduled reminders",
+                "CREED / SYS-02 • KNOWLEDGE ENGINE",
+                "#5EEAD4",
             )
         )
 
-        # Conversations Switcher Section
+        # Two-column Knowledge Architecture
+        cols = QHBoxLayout()
+        cols.setSpacing(16)
+
+        # Left column: Conversations Index + Reminders
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
         convo_top = QHBoxLayout()
-        convo_hdr = QLabel("SAVED CONVERSATIONS")
+        convo_hdr = QLabel("CONVERSATION INDEX")
         convo_hdr.setObjectName("section_header")
-        new_chat_btn = QPushButton("+ NEW CHAT")
+        new_chat_btn = QPushButton("+ NEW")
         new_chat_btn.setObjectName("primary_btn")
         new_chat_btn.clicked.connect(self.new_conversation_requested.emit)
         convo_top.addWidget(convo_hdr)
         convo_top.addStretch()
         convo_top.addWidget(new_chat_btn)
-        layout.addLayout(convo_top)
+        left_col.addLayout(convo_top)
 
         convo_scroll = QScrollArea()
         convo_scroll.setWidgetResizable(True)
         convo_scroll.setObjectName("chat_area")
-        convo_scroll.setFixedHeight(155)
         self.convo_container = QWidget()
         self.convo_layout = QVBoxLayout(self.convo_container)
         self.convo_layout.setSpacing(6)
         self.convo_layout.addStretch()
         convo_scroll.setWidget(self.convo_container)
-        layout.addWidget(convo_scroll)
+        left_col.addWidget(convo_scroll, 2)
 
-        # Notes Section
-        notes_hdr = QLabel("PERSISTENT NOTES")
+        rem_hdr = QLabel("ACTIVE REMINDERS")
+        rem_hdr.setObjectName("section_header")
+        left_col.addWidget(rem_hdr)
+        self.reminders_label = QLabel("No active reminders.")
+        self.reminders_label.setObjectName("meta_label")
+        self.reminders_label.setWordWrap(True)
+        left_col.addWidget(self.reminders_label)
+
+        # Right column: Searchable Knowledge Store
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
+        notes_hdr = QLabel("MEMORY STORE")
         notes_hdr.setObjectName("section_header")
-        layout.addWidget(notes_hdr)
+        right_col.addWidget(notes_hdr)
 
         controls = QHBoxLayout()
         self.search_input = QLineEdit()
@@ -95,13 +118,13 @@ class MemoryTab(QWidget):
         self.search_input.textChanged.connect(self._render_notes)
 
         self.tag_input = QLineEdit()
-        self.tag_input.setPlaceholderText("Tag (e.g. physics)")
-        self.tag_input.setFixedWidth(130)
+        self.tag_input.setPlaceholderText("Tag")
+        self.tag_input.setFixedWidth(105)
 
         self.note_input = QLineEdit()
-        self.note_input.setPlaceholderText("New memory note...")
+        self.note_input.setPlaceholderText("Add knowledge entry...")
 
-        add_btn = QPushButton("+ SAVE")
+        add_btn = QPushButton("+ STORE")
         add_btn.setObjectName("primary_btn")
         add_btn.clicked.connect(self._handle_add)
 
@@ -109,7 +132,7 @@ class MemoryTab(QWidget):
         controls.addWidget(self.tag_input, 1)
         controls.addWidget(self.note_input, 2)
         controls.addWidget(add_btn)
-        layout.addLayout(controls)
+        right_col.addLayout(controls)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -119,16 +142,11 @@ class MemoryTab(QWidget):
         self.notes_layout.setSpacing(8)
         self.notes_layout.addStretch()
         scroll.setWidget(self.notes_container)
-        layout.addWidget(scroll, 2)
+        right_col.addWidget(scroll, 1)
 
-        rem_hdr = QLabel("SCHEDULED REMINDERS")
-        rem_hdr.setObjectName("section_header")
-        layout.addWidget(rem_hdr)
-
-        self.reminders_label = QLabel("No active reminders.")
-        self.reminders_label.setObjectName("meta_label")
-        self.reminders_label.setWordWrap(True)
-        layout.addWidget(self.reminders_label)
+        cols.addLayout(left_col, 2)
+        cols.addLayout(right_col, 3)
+        layout.addLayout(cols, 1)
 
     def _handle_add(self):
         note = self.note_input.text().strip()
@@ -625,6 +643,7 @@ class ModelsTab(QWidget):
         self.installed_table.verticalHeader().setVisible(False)
         self.installed_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.installed_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.installed_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         hdr = self.installed_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
         for col in (1, 2, 3, 4):
@@ -661,6 +680,7 @@ class ModelsTab(QWidget):
         self.catalog_table.verticalHeader().setVisible(False)
         self.catalog_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.catalog_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.catalog_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         chdr = self.catalog_table.horizontalHeader()
         chdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         chdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)

@@ -6,12 +6,12 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 STATE_COLORS = {
-    "Idle": "#6EA8FE",
-    "Listening": "#38BDF8",
-    "Recording": "#F59E0B",
-    "Processing": "#818CF8",
-    "Speaking": "#34D399",
-    "Retrying Connection": "#FB923C",
+    "Idle": "#38BDF8",
+    "Listening": "#34D399",
+    "Recording": "#FB923C",
+    "Processing": "#A78BFA",
+    "Speaking": "#2DD4BF",
+    "Retrying Connection": "#F59E0B",
     "Error": "#F87171",
     "Stopped": "#FBBF24",
 }
@@ -78,7 +78,7 @@ class StatusBar(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(7)
 
-        header = QLabel("SYSTEM STATUS")
+        header = QLabel("SYS // TELEMETRY")
         header.setObjectName("section_header")
         layout.addWidget(header)
 

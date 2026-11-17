@@ -1,107 +1,123 @@
+/* CREED V2.0 — SPATIAL OS DESIGN SYSTEM */
+
 * {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif;
-    color: #F3F4F6;
+    color: #EDEFF5;
 }
 
 QWidget#central_widget {
-    background-color: #0E0F12;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background-color: #07080C;
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: 16px;
 }
 
-QFrame#title_bar {
-    background-color: #131418;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
+QFrame#top_telemetry_bar {
+    background-color: #0B0D14;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
 }
 
-QFrame#sidebar,
-QFrame#right_panel {
-    background-color: #131418;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 12px;
+QFrame#bottom_spatial_dock {
+    background-color: #0B0D14;
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 16px;
 }
 
 QFrame#workspace_frame {
-    background-color: #101114;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 12px;
+    background-color: #07080C;
+    border: none;
 }
 
+/* Architectural Translucent Surfaces */
+QFrame#panel_card,
 QFrame#systems_panel,
-QFrame#activity_panel,
-QFrame#panel_card {
-    background-color: #181A20;
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 10px;
+QFrame#activity_panel {
+    background-color: rgba(16, 19, 28, 220);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
 }
 
+/* Editorial Borderless Message Blocks (NO generic chat bubbles) */
 QFrame#user_msg {
-    background-color: #1E2430;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    border-radius: 12px;
+    background-color: rgba(255, 255, 255, 0.03);
+    border: none;
+    border-right: 2px solid #67E8F9;
+    border-radius: 2px;
 }
 
 QFrame#ai_msg {
-    background-color: #16181D;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 12px;
+    background-color: transparent;
+    border: none;
+    border-left: 2px solid #A78BFA;
+    border-radius: 2px;
 }
 
 QLabel#msg_role_user {
-    color: #93C5FD;
-    font-size: 11px;
-    font-weight: 600;
+    color: #67E8F9;
+    font-family: "Menlo", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
 }
 
 QLabel#msg_role_ai {
-    color: #9CA3AF;
-    font-size: 11px;
-    font-weight: 600;
+    color: #A78BFA;
+    font-family: "Menlo", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
 }
 
 QLabel#msg_body {
-    color: #F3F4F6;
-    font-size: 13px;
+    color: #EDEFF5;
+    font-size: 13.5px;
 }
 
 QLabel#tool_badge {
-    color: #60A5FA;
-    font-family: "SF Mono", Menlo, monospace;
+    color: #FBBF24;
+    font-family: "Menlo", monospace;
     font-size: 11px;
     padding: 4px 8px;
 }
 
 QLabel#tab_title {
-    color: #F9FAFB;
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.2px;
+    color: #F8FAFC;
+    font-family: "SF Pro Display", -apple-system, sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
 }
 
 QLabel#section_header {
-    color: #9CA3AF;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
+    color: #94A3B8;
+    font-family: "Menlo", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.1px;
 }
 
 QLabel#meta_label {
-    color: #71717A;
-    font-size: 11.5px;
+    color: #7D8798;
+    font-family: "Menlo", monospace;
+    font-size: 10.5px;
 }
 
 QLabel#accent_label {
-    color: #93C5FD;
-    font-family: "SF Mono", Menlo, monospace;
+    color: #67E8F9;
+    font-family: "Menlo", monospace;
     font-size: 11px;
+    font-weight: 600;
 }
 
 QLabel#status_value {
-    color: #F3F4F6;
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 12px;
-    font-weight: 600;
+    color: #F8FAFC;
+    font-family: "Menlo", monospace;
+    font-size: 11.5px;
+    font-weight: 700;
 }
 
 QScrollArea#chat_area {
@@ -115,43 +131,44 @@ QScrollArea#chat_area > QWidget > QWidget {
 
 QLineEdit,
 QPlainTextEdit {
-    background-color: #141519;
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 8px;
-    padding: 8px 11px;
-    color: #F3F4F6;
-    font-size: 12.5px;
+    background-color: #0E1017;
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #F8FAFC;
+    font-size: 13px;
 }
 
 QLineEdit:focus,
 QPlainTextEdit:focus {
-    border: 1px solid rgba(255, 255, 255, 0.28);
-    background-color: #171920;
+    border: 1px solid #67E8F9;
+    background-color: #12151F;
 }
 
 QFrame#connection_overlay {
-    background-color: rgba(14, 15, 18, 215);
-    border-radius: 12px;
+    background-color: rgba(7, 8, 12, 224);
 }
 
 QFrame#connection_overlay_card {
-    background-color: #181A20;
-    border: 1px solid rgba(251, 146, 60, 0.55);
-    border-radius: 12px;
+    background-color: #11141E;
+    border: 1px solid #F59E0B;
+    border-radius: 6px;
 }
 
 QLabel#connection_overlay_title {
-    color: #FB923C;
+    color: #F59E0B;
+    font-family: "Menlo", monospace;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
 }
 
 QPushButton#primary_btn {
-    background-color: #F4F4F5;
-    color: #09090B;
-    font-weight: 600;
-    font-size: 11.5px;
-    border-radius: 8px;
+    background-color: #EDEFF5;
+    color: #07080C;
+    font-family: "Menlo", monospace;
+    font-weight: 700;
+    font-size: 11px;
+    border-radius: 5px;
     padding: 7px 14px;
     border: none;
 }
@@ -160,92 +177,104 @@ QPushButton#primary_btn:hover {
     background-color: #FFFFFF;
 }
 
-QPushButton#primary_btn:pressed {
-    background-color: #D4D4D8;
-}
-
 QPushButton#secondary_btn {
-    background-color: #1C1E24;
-    color: #D4D4D8;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 11.5px;
-    font-weight: 500;
-    border-radius: 8px;
+    background-color: #131620;
+    color: #CBD5E1;
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    font-family: "Menlo", monospace;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 5px;
     padding: 6px 11px;
 }
 
 QPushButton#secondary_btn:hover {
-    background-color: #242730;
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    color: #FFFFFF;
+    background-color: #1A1E2C;
+    border: 1px solid rgba(103, 232, 249, 0.55);
+    color: #F8FAFC;
 }
 
-QPushButton#nav_btn {
+/* Spatial Bottom Dock Navigation Buttons */
+QPushButton#dock_btn {
     background-color: transparent;
-    color: #9CA3AF;
-    text-align: left;
+    color: #7D8798;
     border: none;
-    border-left: 2px solid transparent;
-    border-radius: 7px;
-    padding: 7px 12px;
-    font-size: 12.5px;
-    font-weight: 500;
-}
-
-QPushButton#nav_btn:hover {
-    background-color: rgba(255, 255, 255, 0.04);
-    color: #F3F4F6;
-}
-
-QPushButton#nav_btn[active="true"] {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: #FFFFFF;
-    border-left: 2px solid #F4F4F5;
+    border-bottom: 2px solid transparent;
+    border-radius: 4px;
+    padding: 6px 11px;
+    font-family: "Menlo", monospace;
+    font-size: 10.5px;
     font-weight: 600;
 }
 
+QPushButton#dock_btn:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #EDEFF5;
+}
+
+QPushButton#dock_btn[active="true"] {
+    background-color: rgba(103, 232, 249, 0.10);
+    color: #67E8F9;
+    border-bottom: 2px solid #67E8F9;
+    font-weight: 700;
+}
+
+QPushButton#cmd_btn {
+    background-color: #11141D;
+    color: #94A3B8;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 5px;
+    padding: 4px 11px;
+    font-family: "Menlo", monospace;
+    font-size: 10.5px;
+}
+
+QPushButton#cmd_btn:hover {
+    border: 1px solid #67E8F9;
+    color: #F8FAFC;
+}
+
 QPushButton#win_btn {
-    background-color: #1C1E24;
-    color: #9CA3AF;
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 6px;
+    background-color: #141722;
+    color: #94A3B8;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 5px;
     font-size: 10px;
 }
 
 QPushButton#win_btn:hover {
-    background-color: #262932;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    color: #FFFFFF;
+    background-color: #202536;
+    border: 1px solid #67E8F9;
+    color: #F8FAFC;
 }
 
 QProgressBar {
-    background-color: #141519;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 4px;
+    background-color: #0E1017;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 3px;
     height: 6px;
     text-align: center;
 }
 
 QProgressBar::chunk {
-    background-color: #60A5FA;
-    border-radius: 4px;
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #67E8F9, stop:0.5 #A78BFA, stop:1 #F472B6);
+    border-radius: 3px;
 }
 
 QScrollBar:vertical {
     border: none;
     background: transparent;
-    width: 6px;
-    border-radius: 3px;
+    width: 5px;
 }
 
 QScrollBar::handle:vertical {
-    background: rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.14);
     min-height: 24px;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: rgba(255, 255, 255, 0.28);
+    background: #67E8F9;
 }
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {

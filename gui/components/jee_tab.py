@@ -124,9 +124,18 @@ class JEETutorTab(QWidget):
         self.diagram_card.setMinimumWidth(280)
         d_lay = QVBoxLayout(self.diagram_card)
         d_lay.setContentsMargins(12, 10, 12, 10)
-        d_hdr = QLabel("DIAGRAM PREVIEW")
+        d_hdr = QLabel("Diagram Preview")
         d_hdr.setObjectName("section_header")
         d_lay.addWidget(d_hdr)
+
+        self._svg_templates = {}
+        self.diag_combo = QComboBox()
+        self.diag_combo.addItem("Instant Diagram Templates...")
+        self.diag_combo.setStyleSheet(
+            "background-color: #141519; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 4px 8px; font-size: 11px;"
+        )
+        self.diag_combo.currentTextChanged.connect(self._load_svg_template)
+        d_lay.addWidget(self.diag_combo)
 
         if QSvgWidget is not None:
             self.svg_widget = QSvgWidget()
@@ -193,6 +202,12 @@ class JEETutorTab(QWidget):
         if self._current_bubble is not None:
             self._try_render_svg(self._current_bubble._raw_text)
         self._current_bubble = None
+
+    def _load_svg_template(self, name: str):
+        svg = self._svg_templates.get(name)
+        if svg and self.svg_widget is not None:
+            self.svg_widget.load(svg.encode("utf-8"))
+            self.diagram_hint.setText(f"Loaded template: {name}")
 
     def _try_render_svg(self, text: str):
         if self.svg_widget is None:
@@ -539,6 +554,7 @@ class JEETutorTab(QWidget):
         self.vault_table.verticalHeader().setVisible(False)
         self.vault_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.vault_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.vault_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         hdr = self.vault_table.horizontalHeader()
         for col in (0, 1, 2, 3):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
@@ -578,6 +594,10 @@ class JEETutorTab(QWidget):
     def update_data(self, snapshot: dict):
         self._tutor_model_name = snapshot.get("jee_model", "auto")
         self.model_badge.setText(f"Reasoning Model: {self._tutor_model_name}")
+        templates = snapshot.get("svg_templates", {})
+        if templates and not self._svg_templates:
+            self._svg_templates = templates
+            self.diag_combo.addItems(list(templates.keys()))
         self._flashcards = snapshot.get("jee_flashcards", [])
         self._render_card()
 

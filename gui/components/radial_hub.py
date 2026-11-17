@@ -1,123 +1,123 @@
 # gui/components/radial_hub.py
 
 import math
-import random
+import time
 from dataclasses import dataclass, field
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
+    QBrush,
     QColor,
     QFont,
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QRadialGradient,
 )
 from PySide6.QtWidgets import QWidget
-from components.insignia import draw_creed_insignia
-from components.status_bar import STATE_COLORS
 
 
 @dataclass
-class HubNode:
+class SpatialAnchor:
     key: str
+    sys_id: str
     title: str
     subtitle: str
+    accent: str
     tab_index: int
-    angle_deg: float
-    status: str = "ACTIVE"
+    nx: float  # Normalized x (0..1)
+    ny: float  # Normalized y (0..1)
+    align_right: bool = False
     activity_heat: float = 0.0
     hover_anim: float = 0.0
     rect: QRectF = field(default_factory=QRectF)
 
 
+# Precomputed state palettes: (core_primary, core_secondary, glow_color, label)
+CORE_STATE_THEMES = {
+    "Idle": ("#67E8F9", "#A78BFA", "#38BDF8", "DORMANT // READY"),
+    "Listening": ("#6EE7B7", "#38BDF8", "#34D399", "ATTENTIVE // LISTENING"),
+    "Recording": ("#FDBA74", "#F472B6", "#FB923C", "AUDIO CAPTURE"),
+    "Processing": ("#FCD34D", "#FB923C", "#F59E0B", "COMPUTING // THINKING"),
+    "Speaking": ("#5EEAD4", "#818CF8", "#2DD4BF", "VOICE SYNTHESIS"),
+    "Retrying Connection": ("#94A3B8", "#475569", "#64748B", "OFFLINE // RETRYING"),
+    "Error": ("#FDA4AF", "#F43F5E", "#FB7185", "SYSTEM FAULT"),
+}
+
+
 class RadialHubWidget(QWidget):
-    """Calm 60 FPS native QPainter 3D-projected hub with all 9 subsystem nodes."""
+    """Pre-rendered holographic undulating dot-mesh intelligence field (NO logo, NO orbital rings)."""
 
     node_clicked = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setMinimumSize(620, 440)
+        self.setMinimumSize(620, 420)
 
         self._raw_state = "Idle"
-        self._core_state = "Online"
-        self._accent = QColor(STATE_COLORS["Idle"])
-        self._display_accent = QColor(STATE_COLORS["Idle"])
-        self._yaw = 0.0
-        self._pitch = 0.18
-        self._idle_phase = 0.0
-        self._orbit_angle = 0.0
+        self._frame_idx = 0.0
         self._pulse_phase = 0.0
+        self._audio_level = 0.0
         self._hovered_key = None
+        self._last_t = time.monotonic()
 
-        # 3D Fibonacci neural sphere
-        self._sphere_nodes = []
-        n_nodes = 40
-        golden_angle = math.pi * (3.0 - math.sqrt(5.0))
-        for i in range(n_nodes):
-            y = 1.0 - (i / (n_nodes - 1)) * 2.0
-            r = math.sqrt(max(0.0, 1.0 - y * y))
-            theta = golden_angle * i
-            self._sphere_nodes.append((math.cos(theta) * r, y, math.sin(theta) * r))
+        self._sprite_size = 380
+        self._sprite_cache: dict[str, list[QPixmap]] = {}
+        self._bg_cache = None
+        self._bg_size = (0, 0)
 
-        self._sphere_edges = []
-        for i in range(n_nodes):
-            x1, y1, z1 = self._sphere_nodes[i]
-            for j in range(i + 1, n_nodes):
-                x2, y2, z2 = self._sphere_nodes[j]
-                d2 = (x1 - x2) ** 2 + (y1 - y2) ** 2 + (z1 - z2) ** 2
-                if d2 < 0.38:
-                    self._sphere_edges.append((i, j))
+        # Precompute base spherical-lattice coordinates (42 latitude x 48 longitude = 2,016 structured dots)
+        self._lattice = []
+        n_lat, n_lon = 36, 46
+        for i in range(1, n_lat):
+            phi = (i / n_lat) * math.pi  # 0..pi
+            sp, cp = math.sin(phi), math.cos(phi)
+            for j in range(n_lon):
+                theta = (j / n_lon) * 2.0 * math.pi
+                self._lattice.append((phi, theta, sp, cp, math.sin(theta), math.cos(theta)))
 
-        self._ring_specs = [
-            {"tilt_x": 0.48, "tilt_z": 0.25, "r": 0.84},
-            {"tilt_x": -0.58, "tilt_z": 0.52, "r": 1.02},
-        ]
-
-        rng = random.Random(7)
-        self._particles = [
-            {
-                "angle": rng.uniform(0, 2 * math.pi),
-                "dist": rng.uniform(0.45, 1.25),
-                "speed": rng.uniform(0.002, 0.005) * (1 if i % 2 == 0 else -1),
-                "size": rng.uniform(1.2, 2.2),
-                "alpha": rng.randint(45, 115),
-            }
-            for i in range(24)
-        ]
-
-        # 9 evenly spaced nodes matching MainWindow sidebar indices
+        # Asymmetric Swiss-Grid spatial anchors around the central intelligence field
         self.nodes = [
-            HubNode("CONVERSATION", "Conversation", "Chat & Stream", 1, -90),
-            HubNode("VSPOTIFY", "VSpotify", "Visualizer & Audio", 3, -50),
-            HubNode("JEE", "JEE Tutor", "Reasoning & PYQs", 4, -10),
-            HubNode("TOOLS", "Tools", "Actions & Files", 8, 30),
-            HubNode("MODELS", "AI Models", "Local Ollama", 9, 70),
-            HubNode("SETTINGS", "Settings", "Preferences", 10, 110),
-            HubNode("AUTOMATION", "Automation", "Workflows", 6, 150),
-            HubNode("VOICE", "Voice", "Speech & Wake", 5, 190),
-            HubNode("MEMORY", "Memory", "Notes & Chats", 2, -135),
+            SpatialAnchor("CONVERSATION", "01", "Intelligence", "Direct Dialogue", "#67E8F9", 1, 0.14, 0.22),
+            SpatialAnchor("JEE", "04", "JEE Workstation", "Scientific Engine", "#A78BFA", 4, 0.12, 0.50),
+            SpatialAnchor("MEMORY", "02", "Knowledge", "Memory Graph", "#5EEAD4", 2, 0.16, 0.78),
+            SpatialAnchor("VSPOTIFY", "03", "VSpotify", "Audio Canvas", "#F472B6", 3, 0.85, 0.22, align_right=True),
+            SpatialAnchor("AUTOMATION", "05", "Task Ops", "Execution Flow", "#FBBF24", 5, 0.88, 0.48, align_right=True),
+            SpatialAnchor("SYSTEMS", "06", "Machine", "macOS Host", "#FB923C", 6, 0.84, 0.72, align_right=True),
+            SpatialAnchor("MODELS", "08", "AI Models", "Local Weights", "#93C5FD", 8, 0.72, 0.88, align_right=True),
         ]
+
+        self._title_font = QFont("SF Pro Display", 12, QFont.DemiBold)
+        self._sub_font = QFont("Menlo", 8.5)
+        self._id_font = QFont("Menlo", 8, QFont.Bold)
+        self._hud_font = QFont("Menlo", 8.5, QFont.Bold)
+
+        # Pre-render the default Idle sequence immediately so playback is instant
+        self._ensure_state_sprites("Idle")
 
         self._timer = QTimer(self)
-        self._timer.setInterval(16)
+        self._timer.setInterval(12)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._last_t = time.monotonic()
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if self._timer.isActive():
+            self._timer.stop()
+
+    def set_audio_level(self, level: float):
+        self._audio_level = max(0.0, min(1.0, float(level)))
+
     def set_core_state(self, state: str):
-        self._raw_state = state
-        mapping = {
-            "Idle": "Online",
-            "Listening": "Listening",
-            "Recording": "Recording",
-            "Processing": "Thinking",
-            "Speaking": "Speaking",
-            "Retrying Connection": "Reconnecting",
-            "Error": "Error",
-        }
-        self._core_state = mapping.get(state, state)
-        self._accent = QColor(STATE_COLORS.get(state, "#6EA8FE"))
+        self._raw_state = state if state in CORE_STATE_THEMES else "Idle"
+        self._ensure_state_sprites(self._raw_state)
         if state in ("Listening", "Recording", "Speaking"):
             self.pulse_node("VOICE")
         elif state == "Processing":
@@ -130,27 +130,110 @@ class RadialHubWidget(QWidget):
                 n.activity_heat = 1.0
         self.update()
 
+    def _ensure_state_sprites(self, state: str):
+        if state in self._sprite_cache:
+            return
+        c1_hex, c2_hex, glow_hex, _ = CORE_STATE_THEMES.get(state, CORE_STATE_THEMES["Idle"])
+        c1, c2, cg = QColor(c1_hex), QColor(c2_hex), QColor(glow_hex)
+        sz = self._sprite_size
+        cx = cy = sz / 2.0
+        n_frames = 72
+        frames = []
+
+        # State-specific harmonic wave amplitude & speed
+        amp = 0.24 if state in ("Processing", "Recording") else (0.19 if state in ("Listening", "Speaking") else 0.14)
+        if state == "Retrying Connection":
+            amp = 0.05
+
+        for f in range(n_frames):
+            t = (f / n_frames) * 2.0 * math.pi
+            pix = QPixmap(sz, sz)
+            pix.fill(Qt.transparent)
+            p = QPainter()
+            if not p.begin(pix):
+                frames.append(pix)
+                continue
+            try:
+                p.setRenderHint(QPainter.Antialiasing)
+
+                # Subtle volumetric backing (no circular border!)
+                rad_g = QRadialGradient(cx, cy, sz * 0.44)
+                ga = QColor(cg); ga.setAlpha(34 if state != "Retrying Connection" else 14)
+                rad_g.setColorAt(0.0, ga)
+                rad_g.setColorAt(0.65, QColor(cg.red(), cg.green(), cg.blue(), 8))
+                rad_g.setColorAt(1.0, QColor(0, 0, 0, 0))
+                p.fillRect(0, 0, sz, sz, rad_g)
+
+                yaw = t * 0.5
+                pitch = 0.35 + 0.12 * math.sin(t)
+                cy_a, sy_a = math.cos(yaw), math.sin(yaw)
+                cp_a, sp_a = math.cos(pitch), math.sin(pitch)
+
+                pts = []
+                base_r = sz * 0.33
+                for phi, theta, sp, cp, st, ct in self._lattice:
+                    # Organic undulating wave deformation (like reference Image 1)
+                    deform = (
+                        1.0
+                        + amp * math.sin(3.0 * phi + 2.0 * theta - t)
+                        + (amp * 0.55) * math.cos(4.0 * theta - 2.0 * phi + t)
+                    )
+                    x = sp * ct * deform
+                    y = cp * deform
+                    z = sp * st * deform
+
+                    rx = x * cy_a + z * sy_a
+                    rz = -x * sy_a + z * cy_a
+                    ry = y * cp_a - rz * sp_a
+                    rz2 = y * sp_a + rz * cp_a
+
+                    persp = 3.1 / (3.1 - rz2 * 0.72)
+                    sx = cx + rx * base_r * persp
+                    sy = cy + ry * base_r * persp
+                    pts.append((rz2, sx, sy, persp, (y + 1.0) * 0.5))
+
+                pts.sort(key=lambda item: item[0])
+                p.setPen(Qt.NoPen)
+
+                # Blend between c1 (top/cyan/gold) and c2 (bottom/violet/coral) by depth & latitude
+                for rz2, sx, sy, persp, lat_t in pts:
+                    depth = max(0.0, min(1.0, (rz2 + 1.2) / 2.4))
+                    r = int(c1.red() * (1 - lat_t) + c2.red() * lat_t)
+                    g = int(c1.green() * (1 - lat_t) + c2.green() * lat_t)
+                    b = int(c1.blue() * (1 - lat_t) + c2.blue() * lat_t)
+                    alpha = int((35 + 215 * (depth ** 1.4)) * (0.45 if state == "Retrying Connection" else 1.0))
+                    p.setBrush(QColor(r, g, b, alpha))
+                    dot_r = (0.85 + 1.45 * depth) * persp
+                    p.drawEllipse(QPointF(sx, sy), dot_r, dot_r)
+            finally:
+                p.end()
+            frames.append(pix)
+        self._sprite_cache[state] = frames
+
     def _tick(self):
-        active = self._raw_state in ("Processing", "Speaking", "Recording", "Listening")
-        mult = 2.1 if self._raw_state == "Processing" else (1.4 if active else 1.0)
-        self._yaw = (self._yaw + 0.0065 * mult) % (2 * math.pi)
-        self._idle_phase = (self._idle_phase + 0.032 * mult) % (2 * math.pi)
-        self._orbit_angle = (self._orbit_angle + 0.35 * mult) % 360.0
-        self._pulse_phase = (self._pulse_phase + 0.014 * mult) % 1.0
+        now = time.monotonic()
+        dt = min(0.05, max(0.001, now - self._last_t))
+        self._last_t = now
 
-        r = self._display_accent.red() + (self._accent.red() - self._display_accent.red()) * 0.12
-        g = self._display_accent.green() + (self._accent.green() - self._display_accent.green()) * 0.12
-        b = self._display_accent.blue() + (self._accent.blue() - self._display_accent.blue()) * 0.12
-        self._display_accent = QColor(int(r), int(g), int(b))
+        if self._raw_state == "Retrying Connection":
+            fps = 8.0
+        elif self._raw_state in ("Processing", "Recording"):
+            fps = 44.0
+        elif self._raw_state in ("Listening", "Speaking"):
+            fps = 32.0 + self._audio_level * 18.0
+        else:
+            fps = 24.0
 
-        for p in self._particles:
-            p["angle"] = (p["angle"] + p["speed"] * mult) % (2 * math.pi)
+        frames = self._sprite_cache.get(self._raw_state) or self._sprite_cache["Idle"]
+        self._frame_idx = (self._frame_idx + dt * fps) % len(frames)
+        self._pulse_phase = (self._pulse_phase + dt * 0.55) % 1.0
+        self._audio_level *= max(0.0, 1.0 - dt * 7.0)
 
         for n in self.nodes:
             if n.activity_heat > 0.0:
-                n.activity_heat = max(0.0, n.activity_heat - 0.018)
+                n.activity_heat = max(0.0, n.activity_heat - dt * 1.1)
             target_h = 1.0 if self._hovered_key == n.key else 0.0
-            n.hover_anim += (target_h - n.hover_anim) * 0.22
+            n.hover_anim += (target_h - n.hover_anim) * min(1.0, dt * 14.0)
         self.update()
 
     def mouseMoveEvent(self, event):
@@ -173,24 +256,28 @@ class RadialHubWidget(QWidget):
                     self.node_clicked.emit(n.tab_index)
                     return
 
-    def _project(self, x: float, y: float, z: float, cx: float, cy: float, radius: float):
-        cos_y, sin_y = math.cos(self._yaw), math.sin(self._yaw)
-        cos_p, sin_p = math.cos(self._pitch), math.sin(self._pitch)
+    def _build_bg_cache(self, w: int, h: int) -> QPixmap:
+        pix = QPixmap(w, h)
+        pix.fill(QColor("#07080C"))
+        p = QPainter()
+        if not p.begin(pix):
+            return pix
+        try:
+            p.setRenderHint(QPainter.Antialiasing)
+            # Subtle architectural radial depth
+            g = QRadialGradient(w * 0.5, h * 0.48, max(w, h) * 0.6)
+            g.setColorAt(0.0, QColor(18, 22, 36, 95))
+            g.setColorAt(1.0, QColor(7, 8, 12, 0))
+            p.fillRect(0, 0, w, h, g)
 
-        rx = x * cos_y + z * sin_y
-        rz = -x * sin_y + z * cos_y
-        ry = y * cos_p - rz * sin_p
-        rz2 = y * sin_p + rz * cos_p
-
-        perspective = 2.8 / (2.8 - rz2 * 0.65)
-        sx = cx + rx * radius * perspective
-        sy = cy + ry * radius * perspective
-        return sx, sy, rz2
-
-    def _tint(self, alpha: int, lighten: int = 100) -> QColor:
-        c = self._display_accent.lighter(lighten) if lighten != 100 else QColor(self._display_accent)
-        c.setAlpha(max(0, min(255, alpha)))
-        return c
+            # Fine editorial Swiss hairline guides
+            p.setPen(QPen(QColor(255, 255, 255, 10), 1.0))
+            p.drawLine(QPointF(w * 0.29, 28), QPointF(w * 0.29, h - 28))
+            p.drawLine(QPointF(w * 0.71, 28), QPointF(w * 0.71, h - 28))
+            p.drawLine(QPointF(28, h * 0.50), QPointF(w - 28, h * 0.50))
+        finally:
+            p.end()
+        return pix
 
     def paintEvent(self, event):
         painter = QPainter()
@@ -198,167 +285,117 @@ class RadialHubWidget(QWidget):
             return
         try:
             painter.setRenderHint(QPainter.Antialiasing)
-
             w, h = self.width(), self.height()
-            cx, cy = w / 2.0, h / 2.0
-            scale = max(0.72, min(1.25, min(w / 780.0, h / 520.0)))
-            sphere_r = 112.0 * scale
-            active_pulse = self._raw_state in ("Processing", "Listening", "Recording", "Speaking")
 
-            # 1. Soft Ambient Glow
-            bg_grad = QRadialGradient(cx, cy, max(w, h) * 0.48)
-            bg_grad.setColorAt(0.0, self._tint(52, 105))
-            bg_grad.setColorAt(0.45, self._tint(14, 85))
-            bg_grad.setColorAt(1.0, QColor(16, 17, 20, 0))
-            painter.fillRect(0, 0, w, h, bg_grad)
+            if self._bg_cache is None or self._bg_size != (w, h):
+                self._bg_cache = self._build_bg_cache(w, h)
+                self._bg_size = (w, h)
+            painter.drawPixmap(0, 0, self._bg_cache)
 
-            # 2. Subtle Ambient Particles
-            painter.setPen(Qt.NoPen)
-            for p in self._particles:
-                px = cx + math.cos(p["angle"]) * p["dist"] * sphere_r * 1.4
-                py = cy + math.sin(p["angle"]) * p["dist"] * sphere_r * 1.15
-                painter.setBrush(self._tint(p["alpha"], 120))
-                painter.drawEllipse(QPointF(px, py), p["size"], p["size"])
+            cx, cy = w * 0.5, h * 0.48
+            scale = max(0.75, min(1.25, min(w / 880.0, h / 540.0)))
 
-            # 3. 2 Clean Orbital Rings
-            for idx, spec in enumerate(self._ring_specs):
-                r_norm = spec["r"]
-                tilt_x = spec["tilt_x"] + math.sin(self._idle_phase * 0.5 + idx) * 0.06
-                tilt_z = spec["tilt_z"] + self._yaw * (0.55 if idx % 2 == 0 else -0.45)
-                cos_tx, sin_tx = math.cos(tilt_x), math.sin(tilt_x)
-                cos_tz, sin_tz = math.cos(tilt_z), math.sin(tilt_z)
-
-                pts = []
-                segs = 48
-                for k in range(segs + 1):
-                    a = (2 * math.pi * k) / segs
-                    lx, ly, lz = math.cos(a) * r_norm, math.sin(a) * r_norm, 0.0
-                    y1 = ly * cos_tx - lz * sin_tx
-                    z1 = ly * sin_tx + lz * cos_tx
-                    x2 = lx * cos_tz - y1 * sin_tz
-                    y2 = lx * sin_tz + y1 * cos_tz
-                    sx, sy, _ = self._project(x2, y2, z1, cx, cy, sphere_r)
-                    pts.append(QPointF(sx, sy))
-
-                painter.setPen(QPen(self._tint(65 if idx == 0 else 42, 115), 1.1))
-                for k in range(segs):
-                    painter.drawLine(pts[k], pts[k + 1])
-
-            # 4. 3D-Projected Neural Sphere
-            projected = [self._project(x, y, z, cx, cy, sphere_r) for (x, y, z) in self._sphere_nodes]
-
-            for i, j in self._sphere_edges:
-                x1, y1, z1 = projected[i]
-                x2, y2, z2 = projected[j]
-                depth = (z1 + z2) * 0.5
-                alpha = int(max(18, min(110, 52 + depth * 42)))
-                painter.setPen(QPen(self._tint(alpha, 115), 1.0))
-                painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
-
-            painter.setPen(Qt.NoPen)
-            for sx, sy, rz in projected:
-                alpha = int(max(65, min(215, 135 + rz * 70)))
-                r_dot = 2.2 if rz > 0 else 1.4
-                painter.setBrush(self._tint(alpha, 130))
-                painter.drawEllipse(QPointF(sx, sy), r_dot, r_dot)
-
-            # 5. Connected Module Nodes (9 evenly arranged around hub)
-            rx = min(w * 0.39, 315 * scale)
-            ry = min(h * 0.38, 205 * scale)
-            node_w = 144 * scale
-            node_h = 52 * scale
-
+            # 1. Precomputed Spatial Signal Conduits to Asymmetric Subsystem Anchors
             for idx, node in enumerate(self.nodes):
-                rad = math.radians(node.angle_deg)
-                nx = cx + math.cos(rad) * rx
-                ny = cy + math.sin(rad) * ry
-                lift = node.hover_anim * 2.5
-                node.rect = QRectF(nx - node_w / 2, ny - node_h / 2 - lift, node_w, node_h)
+                ax = node.nx * w
+                ay = node.ny * h
+                anchor_w, anchor_h = 166 * scale, 48 * scale
+                node.rect = QRectF(ax - anchor_w / 2, ay - anchor_h / 2, anchor_w, anchor_h)
 
-                heat = max(node.activity_heat, node.hover_anim * 0.85)
-                start_r = sphere_r * 0.96
-                sx = cx + math.cos(rad) * start_r
-                sy = cy + math.sin(rad) * start_r
-                ctrl_x = sx + (nx - sx) * 0.5
+                nc = QColor(node.accent)
+                heat = max(node.activity_heat, node.hover_anim)
+
+                # Connect from edge of dot-mesh field to inner edge of spatial anchor
+                edge_x = ax + (anchor_w / 2 if not node.align_right else -anchor_w / 2)
+                mid_x = cx + (edge_x - cx) * 0.55
 
                 path = QPainterPath()
-                path.moveTo(sx, sy)
-                path.cubicTo(ctrl_x, sy, ctrl_x, ny - lift, nx, ny - lift)
+                path.moveTo(cx, cy)
+                path.lineTo(mid_x, ay)
+                path.lineTo(edge_x, ay)
 
-                line_alpha = int(38 + 150 * heat)
-                painter.setPen(QPen(self._tint(line_alpha, 120), 1.35 if heat > 0.1 else 0.9))
+                lc = QColor(nc); lc.setAlpha(int(34 + 175 * heat))
+                painter.setPen(QPen(lc, 1.5 if heat > 0.1 else 0.9))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawPath(path)
 
-                if heat > 0.05 or active_pulse:
-                    t = (self._pulse_phase + idx * 0.13) % 1.0
+                # Junction dot & travelling pulse
+                painter.setPen(Qt.NoPen)
+                jc = QColor(nc); jc.setAlpha(int(110 + 145 * heat))
+                painter.setBrush(jc)
+                painter.drawEllipse(QPointF(mid_x, ay), 2.2, 2.2)
+
+                if heat > 0.05 or idx % 2 == 0:
+                    t = (self._pulse_phase + idx * 0.14) % 1.0
                     pt = path.pointAtPercent(t)
-                    painter.setPen(Qt.NoPen)
-                    painter.setBrush(self._tint(210 if heat > 0.1 else 100, 140))
-                    painter.drawEllipse(pt, 2.3, 2.3)
+                    pc = QColor(nc); pc.setAlpha(235 if heat > 0.1 else 120)
+                    painter.setBrush(pc)
+                    painter.drawEllipse(pt, 2.5 if heat > 0.1 else 1.7, 2.5 if heat > 0.1 else 1.7)
 
-            # 6. Central Core Emblem & State
-            breath = 1.0 + 0.018 * math.sin(self._idle_phase)
-            core_r = 56 * scale * breath
-            painter.setBrush(QColor(19, 20, 24, 240))
-            painter.setPen(QPen(self._tint(150, 120), 1.3))
-            painter.drawEllipse(QPointF(cx, cy), core_r, core_r)
-
-            glow_val = 0.92 if active_pulse else (0.58 + 0.12 * math.sin(self._idle_phase))
-            draw_creed_insignia(
-                painter,
-                cx,
-                cy - 9 * scale,
-                42 * scale * breath,
-                glow_val,
-                accent_color=self._display_accent.name(),
+            # 2. Blit Pre-Rendered Holographic Dot-Mesh Core Frame (NO LOGO, NO RINGS)
+            frames = self._sprite_cache.get(self._raw_state) or self._sprite_cache["Idle"]
+            frame = frames[int(self._frame_idx) % len(frames)]
+            draw_sz = self._sprite_size * scale * (1.0 + 0.08 * self._audio_level)
+            painter.drawPixmap(
+                QRectF(cx - draw_sz / 2.0, cy - draw_sz / 2.0, draw_sz, draw_sz),
+                frame,
+                QRectF(0, 0, self._sprite_size, self._sprite_size),
             )
 
-            painter.setPen(self._tint(230, 125))
-            painter.setFont(QFont("SF Pro Text", max(8, int(8.5 * scale)), QFont.DemiBold))
+            # Minimal state typography beneath field
+            _, _, glow_hex, state_lbl = CORE_STATE_THEMES.get(self._raw_state, CORE_STATE_THEMES["Idle"])
+            sc = QColor(glow_hex); sc.setAlpha(220)
+            painter.setPen(sc)
+            painter.setFont(self._hud_font)
             painter.drawText(
-                QRectF(cx - 52 * scale, cy + 18 * scale, 104 * scale, 16 * scale),
+                QRectF(cx - 140, cy + draw_sz * 0.44, 280, 18),
                 Qt.AlignCenter,
-                f"● {self._core_state}",
+                state_lbl,
             )
 
-            # 7. Draw Clean Studio Cards
+            # 3. Draw Asymmetric Spatial Subsystem Anchors (Minimal Architectural Marks, NOT Dashboard Cards)
             for node in self.nodes:
-                self._draw_node_card(painter, node, scale)
+                self._draw_anchor(painter, node, scale)
         finally:
             painter.end()
 
-    def _draw_node_card(self, painter: QPainter, node: HubNode, scale: float):
+    def _draw_anchor(self, painter: QPainter, node: SpatialAnchor, scale: float):
         r = node.rect
-        heat = max(node.activity_heat, node.hover_anim * 0.9)
+        nc = QColor(node.accent)
+        heat = max(node.activity_heat, node.hover_anim)
 
-        bg = QColor(
-            int(24 + 8 * node.hover_anim),
-            int(26 + 8 * node.hover_anim),
-            int(32 + 10 * node.hover_anim),
-            245,
-        )
-        border_c = QColor(255, 255, 255, int(18 + 26 * node.hover_anim))
-        if heat > 0.15:
-            border_c = self._tint(int(85 + 135 * heat), 115)
+        # Translucent smoky architectural plate with left/right edge rule (NOT a rounded box card!)
+        bg = QColor(14, 16, 24, int(150 + 75 * heat))
+        painter.fillRect(r, bg)
 
-        painter.setBrush(bg)
-        painter.setPen(QPen(border_c, 1.2 if heat > 0.15 else 1.0))
-        painter.drawRoundedRect(r, 10.0 * scale, 10.0 * scale)
+        rule_x = r.right() - 2 if node.align_right else r.left()
+        rc = QColor(nc); rc.setAlpha(int(140 + 115 * heat))
+        painter.fillRect(QRectF(rule_x, r.top(), 2.5, r.height()), rc)
 
-        painter.setPen(QColor("#F3F4F6"))
-        t_font = QFont("SF Pro Text", max(9, int(9.5 * scale)), QFont.DemiBold)
-        painter.setFont(t_font)
+        align = Qt.AlignRight if node.align_right else Qt.AlignLeft
+        pad_l = 10 if not node.align_right else 8
+        pad_r = 12 if node.align_right else 8
+
+        painter.setPen(rc)
+        painter.setFont(self._id_font)
         painter.drawText(
-            QRectF(r.left() + 13, r.top() + 6, r.width() - 20, 18),
-            Qt.AlignLeft | Qt.AlignVCenter,
+            QRectF(r.left() + pad_l, r.top() + 4, r.width() - pad_l - pad_r, 12),
+            align | Qt.AlignVCenter,
+            f"SYS // {node.sys_id}",
+        )
+
+        painter.setPen(QColor("#F8FAFC"))
+        painter.setFont(self._title_font)
+        painter.drawText(
+            QRectF(r.left() + pad_l, r.top() + 15, r.width() - pad_l - pad_r, 18),
+            align | Qt.AlignVCenter,
             node.title,
         )
 
-        painter.setPen(QColor("#9CA3AF") if heat < 0.2 else self._tint(230, 125))
-        painter.setFont(QFont("SF Pro Text", max(8, int(8 * scale))))
+        painter.setPen(QColor("#94A3B8") if heat < 0.2 else rc)
+        painter.setFont(self._sub_font)
         painter.drawText(
-            QRectF(r.left() + 13, r.top() + 25, r.width() - 20, 18),
-            Qt.AlignLeft | Qt.AlignVCenter,
+            QRectF(r.left() + pad_l, r.top() + 32, r.width() - pad_l - pad_r, 14),
+            align | Qt.AlignVCenter,
             node.subtitle,
         )

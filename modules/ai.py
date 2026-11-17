@@ -29,7 +29,13 @@ class Module(BaseAIProvider):
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
                     self.endpoint,
-                    json={"model": self.model, "messages": history, "stream": False},
+                    json={
+                        "model": self.model,
+                        "messages": history,
+                        "stream": False,
+                        "keep_alive": "15m",
+                        "options": {"num_ctx": 4096},
+                    },
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -57,7 +63,13 @@ class Module(BaseAIProvider):
         self, history: list, tools: Optional[list] = None, model_override: Optional[str] = None
     ) -> AsyncGenerator[dict, None]:
         active_model = model_override or self.model
-        payload = {"model": active_model, "messages": history, "stream": True}
+        payload = {
+            "model": active_model,
+            "messages": history,
+            "stream": True,
+            "keep_alive": "15m",
+            "options": {"num_ctx": 4096},
+        }
         if tools:
             payload["tools"] = tools
 

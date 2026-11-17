@@ -4,8 +4,8 @@ import os
 import sys
 from datetime import datetime
 import httpx
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QPainter, QRadialGradient
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPixmap, QRadialGradient, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -17,17 +17,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-try:
-    from PySide6.QtWebEngineWidgets import QWebEngineView
-except ImportError:
-    QWebEngineView = None
 from worker import WebSocketWorker
 from components.chat_view import ChatView
+from components.command_palette import CommandPalette
 from components.input_bar import InputBar
-from components.insignia import CreedInsigniaWidget
-from components.radial_hub import RadialHubWidget
-from components.status_bar import STATE_COLORS, StatusBar
+from components.jee_tab import JEETutorTab
+from components.radial_hub import CORE_STATE_THEMES, RadialHubWidget
 from components.tabs import (
     AutomationTab,
     MemoryTab,
@@ -35,14 +30,37 @@ from components.tabs import (
     SettingsTab,
     SystemsTab,
     ToolsTab,
-    VoiceTab,
 )
 from components.vspotify_tab import VSpotifyTab
-from components.jee_tab import JEETutorTab
 
 
-class TechWorkspaceFrame(QFrame):
-    """Clean studio workspace container with subtle top-center ambient glow."""
+class SpatialCanvasFrame(QFrame):
+    """Cached deep atmospheric backdrop for all Spatial OS views."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._bg_cache = None
+        self._bg_size = (0, 0)
+
+    def _build_bg(self, w: int, h: int) -> QPixmap:
+        pix = QPixmap(w, h)
+        pix.fill(QColor("#07080C"))
+        p = QPainter()
+        if not p.begin(pix):
+            return pix
+        try:
+            g1 = QRadialGradient(w * 0.18, h * 0.15, max(w, h) * 0.55)
+            g1.setColorAt(0.0, QColor(103, 232, 249, 14))
+            g1.setColorAt(1.0, QColor(7, 8, 12, 0))
+            p.fillRect(0, 0, w, h, g1)
+
+            g2 = QRadialGradient(w * 0.85, h * 0.82, max(w, h) * 0.50)
+            g2.setColorAt(0.0, QColor(167, 139, 250, 14))
+            g2.setColorAt(1.0, QColor(7, 8, 12, 0))
+            p.fillRect(0, 0, w, h, g2)
+        finally:
+            p.end()
+        return pix
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -50,19 +68,17 @@ class TechWorkspaceFrame(QFrame):
         if not painter.begin(self):
             return
         try:
-            painter.setRenderHint(QPainter.Antialiasing)
             w, h = self.width(), self.height()
-
-            grad = QRadialGradient(w * 0.5, h * 0.25, max(w, h) * 0.6)
-            grad.setColorAt(0.0, QColor(96, 165, 250, 14))
-            grad.setColorAt(1.0, QColor(16, 17, 20, 0))
-            painter.fillRect(0, 0, w, h, grad)
+            if self._bg_cache is None or self._bg_size != (w, h):
+                self._bg_cache = self._build_bg(w, h)
+                self._bg_size = (w, h)
+            painter.drawPixmap(0, 0, self._bg_cache)
         finally:
             painter.end()
 
 
 class ConnectionOverlay(QFrame):
-    """Translucent shadow overlay displayed over the workspace when backend connection is lost."""
+    """Translucent overlay displayed when backend connection is lost."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -76,11 +92,11 @@ class ConnectionOverlay(QFrame):
         card_lay.setContentsMargins(28, 18, 28, 18)
         card_lay.setSpacing(6)
 
-        title = QLabel("CONNECTION LOST, RETRYING…")
+        title = QLabel("BACKEND OFFLINE // RETRYING")
         title.setObjectName("connection_overlay_title")
         title.setAlignment(Qt.AlignCenter)
 
-        sub = QLabel("Waiting for CREED backend (127.0.0.1:8000)")
+        sub = QLabel("Waiting for CREED FastAPI server (localhost:8000)")
         sub.setObjectName("meta_label")
         sub.setAlignment(Qt.AlignCenter)
 
@@ -125,12 +141,11 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        self.resize(1320, 820)
-        self.setMinimumSize(1060, 680)
+        self.resize(1340, 840)
+        self.setMinimumSize(1040, 660)
 
         self._old_pos = None
         self.current_ai_bubble = None
-        self._right_collapsed = False
         self._active_api_workers = []
         self._uptime_seconds = 0
         self._is_connected = False
@@ -141,7 +156,6 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.apply_styles()
 
-        # WebSocket client
         self.ws_worker = WebSocketWorker()
         self.ws_worker.status_received.connect(self.on_status_changed)
         self.ws_worker.token_received.connect(self.append_token)
@@ -152,7 +166,6 @@ class MainWindow(QMainWindow):
         self.ws_worker.disconnected_signal.connect(self.on_disconnected)
         self.ws_worker.start()
 
-        # 1-second stopwatch & clock timer
         self._clock_timer = QTimer(self)
         self._clock_timer.setInterval(1000)
         self._clock_timer.timeout.connect(self._update_clock)
@@ -170,225 +183,174 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central)
 
         root_layout = QVBoxLayout(self.central)
-        root_layout.setContentsMargins(10, 10, 10, 10)
-        root_layout.setSpacing(8)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        # ----------------------------
-        # Top Command Bar
-        # ----------------------------
+        # 1. Slim Top Telemetry Header
         self.title_bar = QFrame()
-        self.title_bar.setFixedHeight(44)
-        self.title_bar.setObjectName("title_bar")
+        self.title_bar.setFixedHeight(42)
+        self.title_bar.setObjectName("top_telemetry_bar")
         title_layout = QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(12, 0, 12, 0)
-        title_layout.setSpacing(10)
+        title_layout.setContentsMargins(14, 0, 14, 0)
+        title_layout.setSpacing(12)
 
         self.min_btn = QPushButton("—")
         self.max_btn = QPushButton("▢")
         self.close_btn = QPushButton("✕")
         for btn in (self.min_btn, self.max_btn, self.close_btn):
             btn.setObjectName("win_btn")
-            btn.setFixedSize(26, 22)
+            btn.setFixedSize(24, 20)
 
-        self.top_insignia = CreedInsigniaWidget(size=24)
         self.title_label = QLabel("CREED")
         self.title_label.setObjectName("tab_title")
-        self.version_label = QLabel("v3.0.0")
+        self.version_label = QLabel("v3.5.0")
         self.version_label.setObjectName("meta_label")
-        self.top_status_pill = QLabel("● Connecting")
+
+        self.top_status_pill = QLabel("● CONNECTING")
         self.top_status_pill.setObjectName("accent_label")
+
+        self.top_services_label = QLabel("UVICORN: --  •  OLLAMA: --")
+        self.top_services_label.setObjectName("meta_label")
+
+        self.top_model_label = QLabel("MODEL: --")
+        self.top_model_label.setObjectName("meta_label")
+
+        self.cmd_btn = QPushButton("⌘K  COMMAND")
+        self.cmd_btn.setObjectName("cmd_btn")
+        self.cmd_btn.clicked.connect(self.open_command_palette)
+        self._cmd_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self._cmd_shortcut.activated.connect(self.open_command_palette)
+
+        self.command_palette = CommandPalette(self)
+        self.command_palette.tab_requested.connect(self.switch_tab)
+        self.command_palette.prompt_requested.connect(self.handle_overview_send)
+        self.command_palette.voice_requested.connect(self.handle_voice_toggle)
 
         self.clock_label = QLabel("")
         self.clock_label.setObjectName("meta_label")
-
-        self.collapse_right_btn = QPushButton("PANEL ▸")
-        self.collapse_right_btn.setObjectName("secondary_btn")
-        self.collapse_right_btn.clicked.connect(self.toggle_right_panel)
 
         if sys.platform == "darwin":
             title_layout.addWidget(self.close_btn)
             title_layout.addWidget(self.min_btn)
             title_layout.addWidget(self.max_btn)
             title_layout.addSpacing(8)
-            title_layout.addWidget(self.top_insignia)
-            title_layout.addWidget(self.title_label)
-            title_layout.addWidget(self.version_label)
-            title_layout.addWidget(self.top_status_pill)
-            title_layout.addStretch()
-            title_layout.addWidget(self.clock_label)
-            title_layout.addWidget(self.collapse_right_btn)
-        else:
-            title_layout.addWidget(self.top_insignia)
-            title_layout.addWidget(self.title_label)
-            title_layout.addWidget(self.version_label)
-            title_layout.addWidget(self.top_status_pill)
-            title_layout.addStretch()
-            title_layout.addWidget(self.clock_label)
-            title_layout.addWidget(self.collapse_right_btn)
+        title_layout.addWidget(self.title_label)
+        title_layout.addWidget(self.version_label)
+        title_layout.addWidget(self.top_status_pill)
+        title_layout.addStretch()
+        title_layout.addWidget(self.top_services_label)
+        title_layout.addWidget(self.top_model_label)
+        title_layout.addWidget(self.cmd_btn)
+        title_layout.addWidget(self.clock_label)
+        if sys.platform != "darwin":
             title_layout.addWidget(self.min_btn)
             title_layout.addWidget(self.max_btn)
             title_layout.addWidget(self.close_btn)
 
         root_layout.addWidget(self.title_bar)
 
-        # ----------------------------
-        # Main 3-Area Body
-        # ----------------------------
-        body_layout = QHBoxLayout()
-        body_layout.setSpacing(8)
-        root_layout.addLayout(body_layout, 1)
-
-        # LEFT: Navigation Rail
-        self.sidebar = QFrame()
-        self.sidebar.setFixedWidth(185)
-        self.sidebar.setObjectName("sidebar")
-        side_layout = QVBoxLayout(self.sidebar)
-        side_layout.setContentsMargins(10, 14, 10, 12)
-        side_layout.setSpacing(4)
-
-        brand_box = QVBoxLayout()
-        brand_box.setAlignment(Qt.AlignCenter)
-        self.side_insignia = CreedInsigniaWidget(size=54)
-        brand_title = QLabel("CREED")
-        brand_title.setObjectName("tab_title")
-        brand_title.setAlignment(Qt.AlignCenter)
-        brand_sub = QLabel("Local Mac Agent")
-        brand_sub.setObjectName("meta_label")
-        brand_sub.setAlignment(Qt.AlignCenter)
-        brand_box.addWidget(self.side_insignia, alignment=Qt.AlignCenter)
-        brand_box.addWidget(brand_title)
-        brand_box.addWidget(brand_sub)
-        side_layout.addLayout(brand_box)
-        side_layout.addSpacing(12)
-
-        self.nav_buttons = []
-        nav_items = [
-            ("Overview", 0),
-            ("Conversation", 1),
-            ("Memory", 2),
-            ("VSpotify", 3),
-            ("JEE Tutor", 4),
-            ("Voice", 5),
-            ("Automation", 6),
-            ("Systems", 7),
-            ("Tools", 8),
-            ("AI Models", 9),
-            ("Settings", 10),
-        ]
-        for label, idx in nav_items:
-            btn = QPushButton(label)
-            btn.setObjectName("nav_btn")
-            btn.setProperty("active", "true" if idx == 0 else "false")
-            btn.clicked.connect(lambda checked=False, i=idx: self.switch_tab(i))
-            side_layout.addWidget(btn)
-            self.nav_buttons.append(btn)
-
-        side_layout.addStretch()
-
-        uptime_card = QFrame()
-        uptime_card.setObjectName("panel_card")
-        up_lay = QVBoxLayout(uptime_card)
-        up_lay.setContentsMargins(10, 8, 10, 8)
-        up_hdr = QLabel("Uptime")
-        up_hdr.setObjectName("section_header")
-        self.uptime_value = QLabel("00:00:00")
-        self.uptime_value.setObjectName("accent_label")
-        up_lay.addWidget(up_hdr)
-        up_lay.addWidget(self.uptime_value)
-        side_layout.addWidget(uptime_card)
-
-        # CENTRE: Tech Workspace Stack + Shadow Overlay
-        self.workspace_frame = TechWorkspaceFrame()
+        # 2. Full-Bleed Spatial Workspace (NO Left Sidebar, NO Right Box)
+        self.workspace_frame = SpatialCanvasFrame()
         self.workspace_frame.setObjectName("workspace_frame")
         ws_layout = QVBoxLayout(self.workspace_frame)
         ws_layout.setContentsMargins(0, 0, 0, 0)
 
         self.stack = QStackedWidget()
-        self._stack_slide = QPropertyAnimation(self.stack, b"pos", self)
-        self._stack_slide.setDuration(190)
-        self._stack_slide.setEasingCurve(QEasingCurve.OutCubic)
         ws_layout.addWidget(self.stack)
-
         self.connection_overlay = ConnectionOverlay(self.workspace_frame)
+        root_layout.addWidget(self.workspace_frame, 1)
 
-        # Tab 0: Overview (Native 60 FPS 3D-Projected Sphere + Command Bar)
+        # Tab 0: Spatial Intelligence Hub (Pre-Rendered Holographic Dot-Mesh Core + Floating Command Input)
         overview_page = QWidget()
         ov_lay = QVBoxLayout(overview_page)
-        ov_lay.setContentsMargins(12, 10, 12, 10)
-        ov_lay.setSpacing(6)
+        ov_lay.setContentsMargins(18, 10, 18, 14)
+        ov_lay.setSpacing(8)
 
-        ov_hdr = QLabel("Intelligence Hub")
-        ov_hdr.setObjectName("section_header")
-
-        self.web_visualizer = None
         self.radial_hub = RadialHubWidget()
         self.radial_hub.node_clicked.connect(self.switch_tab)
 
-        self.overview_input = InputBar("Command CREED across Mac, Bluetooth, or Phone...")
+        ov_bottom = QHBoxLayout()
+        ov_bottom.setSpacing(14)
+        self.hub_activity_ticker = QLabel("SYSTEM READY // AWAITING DIRECTIVE")
+        self.hub_activity_ticker.setObjectName("meta_label")
+        self.hub_activity_ticker.setMinimumWidth(260)
+
+        self.overview_input = InputBar("Direct command to CREED Intelligence...")
         self.overview_input.submitted.connect(self.handle_overview_send)
         self.overview_input.voice_clicked.connect(self.handle_voice_toggle)
         self.overview_input.stop_clicked.connect(self.stop_generation)
-        ov_lay.addWidget(ov_hdr)
+        ov_bottom.addWidget(self.hub_activity_ticker)
+        ov_bottom.addWidget(self.overview_input, 1)
+
         ov_lay.addWidget(self.radial_hub, 1)
-        ov_lay.addWidget(self.overview_input)
+        ov_lay.addLayout(ov_bottom)
 
-        # Tab 1: Conversation (with Back to Memory/Chats button)
+        # Tab 1: Editorial Conversational Intelligence (Left context strip + Right borderless stream)
         conv_page = QWidget()
-        conv_lay = QVBoxLayout(conv_page)
-        conv_lay.setContentsMargins(14, 12, 14, 12)
-        conv_lay.setSpacing(8)
+        conv_root = QHBoxLayout(conv_page)
+        conv_root.setContentsMargins(18, 14, 18, 14)
+        conv_root.setSpacing(18)
 
-        conv_top = QHBoxLayout()
-        back_btn = QPushButton("◂ CHATS / MEMORY")
-        back_btn.setObjectName("secondary_btn")
-        back_btn.clicked.connect(lambda: self.switch_tab(2))
-        self.conv_title_label = QLabel("CONVERSATION // PRIMARY SESSION")
-        self.conv_title_label.setObjectName("section_header")
-        conv_top.addWidget(back_btn)
-        conv_top.addSpacing(10)
-        conv_top.addWidget(self.conv_title_label)
-        conv_top.addStretch()
+        conv_rail = QFrame()
+        conv_rail.setFixedWidth(220)
+        conv_rail.setObjectName("panel_card")
+        cr_lay = QVBoxLayout(conv_rail)
+        cr_lay.setContentsMargins(14, 14, 14, 14)
+        cr_lay.setSpacing(10)
 
+        cr_tag = QLabel("CREED / SYS-01")
+        cr_tag.setObjectName("section_header")
+        self.conv_title_label = QLabel("Primary Session")
+        self.conv_title_label.setObjectName("tab_title")
+        self.conv_title_label.setWordWrap(True)
+
+        self.conv_model_meta = QLabel("Model: --")
+        self.conv_model_meta.setObjectName("accent_label")
+        self.conv_uptime_meta = QLabel("Uptime: 00:00:00")
+        self.conv_uptime_meta.setObjectName("meta_label")
+
+        hist_btn = QPushButton("Browse Sessions ▸")
+        hist_btn.setObjectName("secondary_btn")
+        hist_btn.clicked.connect(lambda: self.switch_tab(2))
+
+        act_hdr = QLabel("RECENT TELEMETRY")
+        act_hdr.setObjectName("section_header")
+        self.activity_feed = QLabel("Waiting for telemetry...")
+        self.activity_feed.setObjectName("meta_label")
+        self.activity_feed.setWordWrap(True)
+        self.activity_feed.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+        cr_lay.addWidget(cr_tag)
+        cr_lay.addWidget(self.conv_title_label)
+        cr_lay.addWidget(self.conv_model_meta)
+        cr_lay.addWidget(self.conv_uptime_meta)
+        cr_lay.addWidget(hist_btn)
+        cr_lay.addSpacing(8)
+        cr_lay.addWidget(act_hdr)
+        cr_lay.addWidget(self.activity_feed, 1)
+
+        conv_main = QWidget()
+        cm_lay = QVBoxLayout(conv_main)
+        cm_lay.setContentsMargins(0, 0, 0, 0)
+        cm_lay.setSpacing(10)
         self.chat_view = ChatView()
-        self.input_bar = InputBar("Ask CREED anything... (Shift+Enter for new line)")
+        self.input_bar = InputBar("Communicate with CREED... (Shift+Enter for newline)")
         self.input_bar.submitted.connect(self.handle_send)
         self.input_bar.stop_clicked.connect(self.stop_generation)
         self.input_bar.voice_clicked.connect(self.handle_voice_toggle)
-        conv_lay.addLayout(conv_top)
-        conv_lay.addWidget(self.chat_view, 1)
-        conv_lay.addWidget(self.input_bar)
+        cm_lay.addWidget(self.chat_view, 1)
+        cm_lay.addWidget(self.input_bar)
 
-        # Tabs 2-7
+        conv_root.addWidget(conv_rail)
+        conv_root.addWidget(conv_main, 1)
+
+        # Tabs 2..10
         self.memory_tab = MemoryTab()
         self.memory_tab.add_note_requested.connect(self.add_memory_note)
         self.memory_tab.delete_note_requested.connect(self.delete_memory_note)
         self.memory_tab.conversation_selected.connect(self.open_conversation)
         self.memory_tab.new_conversation_requested.connect(self.create_new_conversation)
         self.memory_tab.delete_conversation_requested.connect(self.delete_conversation)
-
-        self.systems_tab = SystemsTab()
-        self.systems_tab.refresh_requested.connect(self.fetch_snapshot)
-
-        self.tools_tab = ToolsTab()
-
-        self.voice_tab = VoiceTab()
-        self.voice_tab.voice_toggle_requested.connect(self.handle_voice_toggle)
-        self.voice_tab.stop_requested.connect(self.stop_generation)
-
-        self.automation_tab = AutomationTab()
-        self.automation_tab.run_workflow_requested.connect(self.run_workflow)
-        self.automation_tab.create_workflow_requested.connect(self.create_workflow)
-        self.automation_tab.delete_workflow_requested.connect(self.delete_workflow)
-
-        self.models_tab = ModelsTab()
-        self.models_tab.select_model_requested.connect(self.select_model)
-        self.models_tab.pull_model_requested.connect(self.pull_model)
-        self.models_tab.delete_model_requested.connect(self.delete_model)
-        self.models_tab.refresh_requested.connect(self.fetch_snapshot)
-
-        self.settings_tab = SettingsTab()
-        self.settings_tab.save_requested.connect(self.save_settings)
-        self.settings_tab.restart_gui_requested.connect(self.restart_gui)
 
         self.vspotify_tab = VSpotifyTab()
 
@@ -402,13 +364,32 @@ class MainWindow(QMainWindow):
         self.jee_tab.generate_test_requested.connect(self.generate_jee_test)
         self.jee_tab.submit_test_requested.connect(self.submit_jee_test)
 
+        self.automation_tab = AutomationTab()
+        self.automation_tab.run_workflow_requested.connect(self.run_workflow)
+        self.automation_tab.create_workflow_requested.connect(self.create_workflow)
+        self.automation_tab.delete_workflow_requested.connect(self.delete_workflow)
+
+        self.systems_tab = SystemsTab()
+        self.systems_tab.refresh_requested.connect(self.fetch_snapshot)
+
+        self.tools_tab = ToolsTab()
+
+        self.models_tab = ModelsTab()
+        self.models_tab.select_model_requested.connect(self.select_model)
+        self.models_tab.pull_model_requested.connect(self.pull_model)
+        self.models_tab.delete_model_requested.connect(self.delete_model)
+        self.models_tab.refresh_requested.connect(self.fetch_snapshot)
+
+        self.settings_tab = SettingsTab()
+        self.settings_tab.save_requested.connect(self.save_settings)
+        self.settings_tab.restart_gui_requested.connect(self.restart_gui)
+
         for page in (
             overview_page,
             conv_page,
             self.memory_tab,
             self.vspotify_tab,
             self.jee_tab,
-            self.voice_tab,
             self.automation_tab,
             self.systems_tab,
             self.tools_tab,
@@ -417,36 +398,38 @@ class MainWindow(QMainWindow):
         ):
             self.stack.addWidget(page)
 
-        # RIGHT: Collapsible Telemetry Panel
-        self.right_panel = QFrame()
-        self.right_panel.setFixedWidth(290)
-        self.right_panel.setObjectName("right_panel")
-        right_layout = QVBoxLayout(self.right_panel)
-        right_layout.setContentsMargins(10, 10, 10, 10)
-        right_layout.setSpacing(10)
+        # 3. Bottom Spatial Navigation Dock
+        self.bottom_dock = QFrame()
+        self.bottom_dock.setFixedHeight(44)
+        self.bottom_dock.setObjectName("bottom_spatial_dock")
+        dock_lay = QHBoxLayout(self.bottom_dock)
+        dock_lay.setContentsMargins(14, 4, 14, 4)
+        dock_lay.setSpacing(4)
 
-        self.status_bar = StatusBar()
+        self.nav_buttons = []
+        nav_items = [
+            ("00 HUB", 0),
+            ("01 INTELLIGENCE", 1),
+            ("02 MEMORY", 2),
+            ("03 VSPOTIFY", 3),
+            ("04 JEE", 4),
+            ("05 TASKS", 5),
+            ("06 MACHINE", 6),
+            ("07 TOOLS", 7),
+            ("08 MODELS", 8),
+            ("09 CONFIG", 9),
+        ]
+        dock_lay.addStretch()
+        for label, idx in nav_items:
+            btn = QPushButton(label)
+            btn.setObjectName("dock_btn")
+            btn.setProperty("active", "true" if idx == 0 else "false")
+            btn.clicked.connect(lambda checked=False, i=idx: self.switch_tab(i))
+            dock_lay.addWidget(btn)
+            self.nav_buttons.append(btn)
+        dock_lay.addStretch()
 
-        self.activity_panel = QFrame()
-        self.activity_panel.setObjectName("activity_panel")
-        act_lay = QVBoxLayout(self.activity_panel)
-        act_lay.setContentsMargins(14, 12, 14, 12)
-        act_lay.setSpacing(6)
-        act_hdr = QLabel("RECENT ACTIVITY")
-        act_hdr.setObjectName("section_header")
-        self.activity_feed = QLabel("Waiting for backend telemetry...")
-        self.activity_feed.setObjectName("meta_label")
-        self.activity_feed.setWordWrap(True)
-        self.activity_feed.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        act_lay.addWidget(act_hdr)
-        act_lay.addWidget(self.activity_feed, 1)
-
-        right_layout.addWidget(self.status_bar)
-        right_layout.addWidget(self.activity_panel, 1)
-
-        body_layout.addWidget(self.sidebar)
-        body_layout.addWidget(self.workspace_frame, 1)
-        body_layout.addWidget(self.right_panel)
+        root_layout.addWidget(self.bottom_dock)
 
         self.min_btn.clicked.connect(self.showMinimized)
         self.close_btn.clicked.connect(self.close)
@@ -457,46 +440,28 @@ class MainWindow(QMainWindow):
         if hasattr(self, "connection_overlay") and hasattr(self, "workspace_frame"):
             self.connection_overlay.setGeometry(self.workspace_frame.rect())
 
+    def open_command_palette(self):
+        self.command_palette.show_centered()
+
     def switch_tab(self, index: int):
         if self.stack.currentIndex() != index:
             self.stack.setCurrentIndex(index)
-            self._stack_slide.stop()
-            self._stack_slide.setStartValue(QPoint(0, 10))
-            self._stack_slide.setEndValue(QPoint(0, 0))
-            self._stack_slide.start()
+            page = self.stack.currentWidget()
+            if page is not None:
+                self._page_anim = QPropertyAnimation(page, b"pos", self)
+                self._page_anim.setDuration(180)
+                self._page_anim.setEasingCurve(QEasingCurve.OutQuart)
+                self._page_anim.setStartValue(QPoint(0, 10))
+                self._page_anim.setEndValue(QPoint(0, 0))
+                self._page_anim.start()
         for idx, btn in enumerate(self.nav_buttons):
             btn.setProperty("active", "true" if idx == index else "false")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
         if index == 3 and self._is_connected:
             self.vspotify_tab.ensure_loaded()
-        if index in (2, 3, 4, 5, 6, 7, 8, 9, 10) and self._is_connected:
+        if index in (2, 3, 4, 5, 6, 7, 8, 9) and self._is_connected:
             self.fetch_snapshot()
-
-    def _on_visualizer_title(self, title: str):
-        if title.startswith("CREED_TAB:"):
-            try:
-                tab_idx = int(title.split(":")[1])
-                self.switch_tab(tab_idx)
-            except (IndexError, ValueError):
-                pass
-
-    def toggle_right_panel(self):
-        self._right_collapsed = not self._right_collapsed
-        self.collapse_right_btn.setText("PANEL ◂" if self._right_collapsed else "PANEL ▸")
-        self._panel_anim = QPropertyAnimation(self.right_panel, b"maximumWidth", self)
-        self._panel_anim.setDuration(240)
-        self._panel_anim.setEasingCurve(QEasingCurve.OutCubic)
-        if self._right_collapsed:
-            self._panel_anim.setStartValue(self.right_panel.width())
-            self._panel_anim.setEndValue(0)
-            self._panel_anim.finished.connect(lambda: self.right_panel.setVisible(False))
-        else:
-            self.right_panel.setVisible(True)
-            self._panel_anim.setStartValue(0)
-            self._panel_anim.setEndValue(290)
-        self._panel_anim.start()
-        QTimer.singleShot(250, lambda: self.connection_overlay.setGeometry(self.workspace_frame.rect()))
 
     def apply_styles(self):
         try:
@@ -514,10 +479,10 @@ class MainWindow(QMainWindow):
         return f"{hrs:02d}:{mins:02d}:{s:02d}"
 
     def _update_clock(self):
-        self.clock_label.setText(datetime.now().strftime("%H:%M:%S  •  %d %b %Y"))
+        self.clock_label.setText(datetime.now().strftime("%H:%M:%S"))
         if self._is_connected:
             self._uptime_seconds += 1
-            self.uptime_value.setText(self._format_uptime(self._uptime_seconds))
+            self.conv_uptime_meta.setText(f"Uptime: {self._format_uptime(self._uptime_seconds)}")
 
     def _run_api(self, method: str, path: str, payload: dict = None, tag: str = "snapshot"):
         worker = ApiWorker(method=method, path=path, payload=payload, tag=tag)
@@ -543,7 +508,7 @@ class MainWindow(QMainWindow):
             convo = data.get("conversation", {})
             sid = convo.get("id", "default")
             self._current_session_id = sid
-            self.conv_title_label.setText("CONVERSATION // NEW SESSION")
+            self.conv_title_label.setText("New Session")
             self.chat_view.clear_bubbles()
             self.current_ai_bubble = None
             self.switch_tab(1)
@@ -562,7 +527,7 @@ class MainWindow(QMainWindow):
 
     def open_conversation(self, session_id: str, title: str):
         self._current_session_id = session_id
-        self.conv_title_label.setText(f"CONVERSATION // {title.upper()}")
+        self.conv_title_label.setText(title)
         self._run_api("GET", f"/api/conversations/{session_id}", tag="load_convo")
 
     def create_new_conversation(self):
@@ -571,7 +536,7 @@ class MainWindow(QMainWindow):
     def delete_conversation(self, session_id: str):
         if session_id == self._current_session_id:
             self._current_session_id = "default"
-            self.conv_title_label.setText("CONVERSATION // PRIMARY SESSION")
+            self.conv_title_label.setText("Primary Session")
             self.chat_view.clear_bubbles()
         self._run_api("DELETE", f"/api/conversations/{session_id}", tag="mutate")
 
@@ -634,9 +599,17 @@ class MainWindow(QMainWindow):
         )
 
     def on_snapshot_received(self, data: dict):
-        self.version_label.setText(f"v{data.get('version', '3.0.0')}")
+        self.version_label.setText(f"v{data.get('version', '3.5.0')}")
         self._uptime_seconds = int(data.get("uptime_seconds", self._uptime_seconds))
-        self.uptime_value.setText(self._format_uptime(self._uptime_seconds))
+        self.conv_uptime_meta.setText(f"Uptime: {self._format_uptime(self._uptime_seconds)}")
+
+        model = data.get("model", "unknown")
+        ollama_ok = data.get("ollama_online", False)
+        self.top_model_label.setText(f"MODEL: {model}")
+        self.conv_model_meta.setText(f"Model: {model}")
+        self.top_services_label.setText(
+            f"UVICORN: ONLINE  •  OLLAMA: {'ONLINE' if ollama_ok else 'OFFLINE'}"
+        )
 
         tools = data.get("tools", [])
         ollama_models = data.get("ollama_models", [])
@@ -647,18 +620,11 @@ class MainWindow(QMainWindow):
         elif self._snapshot_timer.interval() != 5000:
             self._snapshot_timer.setInterval(5000)
 
-        self.status_bar.update_snapshot(data)
         self.memory_tab.update_data(data.get("memory", {}), data.get("conversations", []))
         self.systems_tab.update_data(data.get("systems", []))
         self.tools_tab.update_data(tools, data.get("tool_history", []))
-        self.voice_tab.update_data(data.get("voice", {}))
         self.automation_tab.update_data(data.get("workflows", []), tools)
-        self.models_tab.update_data(
-            data.get("model", ""),
-            ollama_models,
-            pull_info,
-            data.get("ollama_online", False),
-        )
+        self.models_tab.update_data(model, ollama_models, pull_info, ollama_ok)
         self.settings_tab.update_data(data.get("config", {}), ollama_models)
         self.jee_tab.update_data(data)
 
@@ -676,17 +642,19 @@ class MainWindow(QMainWindow):
 
         activity = data.get("activity", [])
         if activity:
+            latest = activity[0]
+            self.hub_activity_ticker.setText(
+                f"[{latest.get('timestamp', '')}] {latest.get('node', '')}: {latest.get('message', '')[:42]}"
+            )
             lines = [
                 f"[{a.get('timestamp', '')}] {a.get('node', '')}: {a.get('message', '')}"
-                for a in activity[:10]
+                for a in activity[:8]
             ]
             self.activity_feed.setText("\n\n".join(lines))
 
-    # ----------------------------
-    # Window Drag
-    # ----------------------------
+    # Window Drag (Title Bar Only)
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton and event.position().toPoint().y() <= self.title_bar.height() + 6:
             self._old_pos = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
@@ -697,39 +665,34 @@ class MainWindow(QMainWindow):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
-            pos = event.position().toPoint()
-            if pos.y() <= self.title_bar.height() + 14:
+            if event.position().toPoint().y() <= self.title_bar.height() + 10:
                 self.toggle_fullscreen()
 
     def mouseReleaseEvent(self, event):
         self._old_pos = None
 
-    # ----------------------------
     # Chat & Voice Logic
-    # ----------------------------
     def handle_overview_send(self, text: str):
-        # Stay on the Overview Intelligence Hub while logging the chat in Conversation
         self.handle_send(text)
 
     def handle_send(self, text: str):
         self._active_chat_target = "default"
         self.chat_view.add_bubble(text, True)
         self.current_ai_bubble = self.chat_view.add_bubble("", False)
-        if self.radial_hub:
-            self.radial_hub.pulse_node("CONVERSATION")
+        self.radial_hub.pulse_node("CONVERSATION")
         self.ws_worker.send_message(
             {"type": "chat", "text": text, "session_id": self._current_session_id}
         )
 
     def handle_jee_send(self, text: str):
         self._active_chat_target = "jee"
+        self.radial_hub.pulse_node("JEE")
         self.ws_worker.send_message(
             {"type": "chat", "text": text, "session_id": "jee-tutor", "mode": "jee"}
         )
 
     def handle_voice_toggle(self):
-        if self.radial_hub:
-            self.radial_hub.pulse_node("VOICE")
+        self.radial_hub.pulse_node("VOICE")
         self.ws_worker.send_message({"type": "voice_toggle"})
 
     def stop_generation(self):
@@ -751,7 +714,6 @@ class MainWindow(QMainWindow):
         self.fetch_snapshot()
 
     def handle_transcription(self, text: str):
-        # Stay on the current hub/tab; record transcription in Conversation
         self.chat_view.add_bubble(text, True)
         self.current_ai_bubble = self.chat_view.add_bubble("", False)
 
@@ -764,27 +726,17 @@ class MainWindow(QMainWindow):
         self.close()
 
     def on_status_changed(self, state: str):
-        color = STATE_COLORS.get(state, "#56D9E8")
-        self.status_bar.set_status(state)
-        self.voice_tab.set_status(state)
-        if self.radial_hub:
-            self.radial_hub.set_core_state(state)
+        _, _, glow_hex, _ = CORE_STATE_THEMES.get(state, CORE_STATE_THEMES["Idle"])
+        self.radial_hub.set_core_state(state)
         self.top_status_pill.setText(f"● {state.upper()}")
         self.top_status_pill.setStyleSheet(
-            f"color: {color}; font-family: 'SF Mono', monospace; font-size: 11px;"
+            f"color: {glow_hex}; font-family: 'Menlo', monospace; font-size: 11px; font-weight: 700;"
         )
-        glow = 0.95 if state in ("Processing", "Speaking", "Recording", "Listening") else 0.6
-        self.side_insignia.set_glow(glow)
-        self.side_insignia.set_accent(color)
-        self.top_insignia.set_glow(glow)
-        self.top_insignia.set_accent(color)
 
     def on_connected(self):
         self._is_connected = True
         self.connection_overlay.hide()
         self.on_status_changed("Idle")
-        if self.web_visualizer is not None:
-            self.web_visualizer.setUrl(QUrl("http://localhost:8000/visualizer"))
         self.fetch_snapshot()
 
     def on_disconnected(self):
@@ -792,6 +744,7 @@ class MainWindow(QMainWindow):
         self.connection_overlay.setGeometry(self.workspace_frame.rect())
         self.connection_overlay.show()
         self.connection_overlay.raise_()
+        self.top_services_label.setText("UVICORN: OFFLINE  •  OLLAMA: UNKNOWN")
         self.on_status_changed("Retrying Connection")
 
     def on_error(self, error: str):

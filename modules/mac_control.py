@@ -39,6 +39,34 @@ def mac_open_app(app_name: str) -> str:
     return f"Could not open '{app_name}': {err or 'app not found'}"
 
 
+def mac_open_url(url: str) -> str:
+    u = url.strip()
+    if not u.startswith(("http://", "https://")):
+        return "URL must start with http:// or https://"
+    code, _, err = _run(["open", u])
+    return f"Opened {u} in browser." if code == 0 else f"Failed to open URL: {err}"
+
+
+def mac_list_running_apps() -> str:
+    code, out, err = _run(["ps", "-Ao", "comm="])
+    if code != 0:
+        return f"Failed to list apps: {err}"
+    apps = sorted({
+        Path(line.strip()).name
+        for line in out.splitlines()
+        if ".app/Contents/MacOS/" in line
+    })
+    return "Running apps:\n" + ("\n".join(f"- {a}" for a in apps[:25]) if apps else "(none)")
+
+
+def mac_close_app(app_name: str) -> str:
+    name = app_name.strip()
+    if not name:
+        return "App name is required."
+    code, _, _ = _run(["pkill", "-ix", name])
+    return f"Closed {name}." if code == 0 else f"No running process matched '{name}'."
+
+
 def mac_clipboard_read() -> str:
     if not shutil.which("pbpaste"):
         return "pbpaste not available on this OS."
@@ -62,7 +90,29 @@ def mac_system_info() -> str:
         return "mac_system_info is only supported on macOS."
     _, batt, _ = _run(["pmset", "-g", "batt"])
     _, up, _ = _run(["uptime"])
-    return f"Battery:\n{batt}\n\nUptime:\n{up}"
+    _, disk, _ = _run(["df", "-h", str(Path.home())])
+    disk_line = disk.splitlines()[-1] if disk else ""
+    return f"Battery:\n{batt}\n\nUptime:\n{up}\n\nHome Disk:\n{disk_line}"
+
+
+def fs_search_files(query: str, subfolder: str = "") -> str:
+    try:
+        root = _resolve_safe_path(subfolder) if subfolder.strip() else DOCUMENTS_ROOT
+        if not root.exists():
+            return f"Folder not found: {root}"
+        q = query.strip().lower()
+        matches = []
+        for p in root.rglob("*"):
+            if ".venv" in p.parts or ".git" in p.parts or "node_modules" in p.parts:
+                continue
+            if p.is_file() and (not q or q in p.name.lower()):
+                rel = p.relative_to(DOCUMENTS_ROOT)
+                matches.append(f"- {rel} ({p.stat().st_size // 1024} KB)")
+                if len(matches) >= 20:
+                    break
+        return "\n".join(matches) if matches else f"No files matching '{query}' in {root}."
+    except Exception as e:
+        return f"Search failed: {e}"
 
 
 def fs_write_file(path: str, content: str, open_in_vscode: bool = True) -> str:
@@ -114,6 +164,36 @@ def register_tools(registry):
         handler=mac_open_app,
     )
     registry.register(
+        name="mac_open_url",
+        description="Open an http/https URL in the user's default Mac browser.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Full URL starting with https:// or http://"}
+            },
+            "required": ["url"],
+        },
+        handler=mac_open_url,
+    )
+    registry.register(
+        name="mac_list_running_apps",
+        description="List currently running GUI applications on the user's Mac.",
+        parameters={"type": "object", "properties": {}},
+        handler=mac_list_running_apps,
+    )
+    registry.register(
+        name="mac_close_app",
+        description="Close a running user application on macOS by process/app name.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "app_name": {"type": "string", "description": "Application/process name to close"}
+            },
+            "required": ["app_name"],
+        },
+        handler=mac_close_app,
+    )
+    registry.register(
         name="mac_clipboard_read",
         description="Read the current text contents of the Mac clipboard.",
         parameters={"type": "object", "properties": {}},
@@ -133,9 +213,22 @@ def register_tools(registry):
     )
     registry.register(
         name="mac_system_info",
-        description="Get Mac battery status, charging state, and system uptime.",
+        description="Get Mac battery status, charging state, system uptime, and home disk space.",
         parameters={"type": "object", "properties": {}},
         handler=mac_system_info,
+    )
+    registry.register(
+        name="fs_search_files",
+        description="Search for files by filename inside ~/Documents (or a subfolder like Apps).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Filename keyword"},
+                "subfolder": {"type": "string", "description": "Optional subfolder inside ~/Documents"},
+            },
+            "required": ["query"],
+        },
+        handler=fs_search_files,
     )
     registry.register(
         name="fs_write_file",
