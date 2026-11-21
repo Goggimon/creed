@@ -39,7 +39,8 @@ from modules.base_ai import (
     ProviderRegistry,
     ProviderUnavailableError,
 )
-from modules.memory import InMemoryMemoryRepository, Module as MemoryModule
+from modules.memory import InMemoryMemoryRepository
+from modules.memory import Module as MemoryModule
 from monitoring.latency_tracker import latency_tracker
 from utils.logger import clear_recent_events, get_recent_events
 
@@ -811,6 +812,7 @@ class TestTranche43LocalCloudRouting(unittest.IsolatedAsyncioTestCase):
 
     async def test_19_privacy_metadata_lifecycle_across_sqlite_persistence_and_recovery(self):
         import tempfile
+
         from core.ports.tasks import TaskStatus
         from infrastructure.sqlite_tasks import SQLiteTaskRepository
 

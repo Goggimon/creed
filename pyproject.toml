@@ -54,8 +54,12 @@ exclude = ["__pycache__", ".venv", "logs", "benchmarks"]
 select = ["E", "F", "I", "W"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.11"
+explicit_package_bases = true
 ignore_missing_imports = true
 warn_unused_ignores = true
 exclude = ["^tests/", "^gui/"]

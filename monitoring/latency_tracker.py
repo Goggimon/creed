@@ -352,7 +352,7 @@ class LatencyTracker:
             stats = {}
             for stage, dq in self._samples.items():
                 vals = sorted(dq)
-                entry = {
+                entry: dict[str, object] = {
                     "count": len(vals),
                     "last": round(dq[-1], 1) if dq else 0.0,
                     "p50": _percentile(vals, 50),

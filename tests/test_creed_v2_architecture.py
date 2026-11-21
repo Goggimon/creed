@@ -251,7 +251,7 @@ class TestAdversarialAsyncReliability(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         unretrieved_errors = []
         orig_handler = loop.get_exception_handler()
-        loop.set_exception_handler(lambda l, ctx: unretrieved_errors.append(ctx))
+        loop.set_exception_handler(lambda _loop, ctx: unretrieved_errors.append(ctx))
         try:
             class HangingFaultyAI:
                 model = "qwen2.5:3b"
@@ -608,7 +608,7 @@ class TestArchitectureBoundaryConformance(unittest.TestCase):
         memory_imports = self._collect_imports(ROOT / "modules" / "memory.py")
         if "sqlite3" in memory_imports or any(i.startswith("infrastructure") for i in memory_imports):
             violations.append("modules/memory.py must not import sqlite3 or infrastructure (must use MemoryRepository)")
-        self.assertEqual(violations, [], f"Architecture boundary violations:\n" + "\n".join(violations))
+        self.assertEqual(violations, [], "Architecture boundary violations:\n" + "\n".join(violations))
 
 
 class TestProviderContractsAndObservability(unittest.IsolatedAsyncioTestCase):
@@ -871,6 +871,7 @@ class TestMemoryRepositoryAndMigrations(unittest.TestCase):
         import sqlite3
         import tempfile
         import threading
+
         from infrastructure.migrations import SQLiteMigrator
         from infrastructure.sqlite_memory import SQLiteMemoryRepository
         from modules.memory import Module as MemoryModule
@@ -896,8 +897,10 @@ class TestMemoryRepositoryAndMigrations(unittest.TestCase):
     def test_missing_repository_fails_loudly_and_logs_persistence_status(self):
         import tempfile
         import threading
+
         from infrastructure.sqlite_memory import SQLiteMemoryRepository
-        from modules.memory import MemoryError, Module as MemoryModule
+        from modules.memory import MemoryError
+        from modules.memory import Module as MemoryModule
         from utils.logger import clear_recent_events, get_recent_events
 
         lock = threading.Lock()
@@ -927,6 +930,7 @@ class TestMemoryRepositoryAndMigrations(unittest.TestCase):
         import sqlite3
         import tempfile
         import threading
+
         from infrastructure.sqlite_memory import SQLiteMemoryRepository
         from modules.memory import Module as MemoryModule
 
@@ -964,9 +968,11 @@ class TestMemoryRepositoryAndMigrations(unittest.TestCase):
         import sqlite3
         import tempfile
         import threading
+
         from infrastructure.migrations import DEFAULT_MIGRATIONS, Migration, SQLiteMigrator
         from infrastructure.sqlite_memory import SQLiteMemoryRepository
-        from modules.memory import MigrationError, Module as MemoryModule
+        from modules.memory import MigrationError
+        from modules.memory import Module as MemoryModule
 
         real_db = ROOT / "creed.db"
         if not real_db.exists():
@@ -987,7 +993,6 @@ class TestMemoryRepositoryAndMigrations(unittest.TestCase):
             pre_msg_sessions = {
                 r["session_id"] for r in pre_rows["messages"]
             }
-            pre_conv_ids = {r["id"] for r in pre_rows["conversations"]}
             pre.close()
 
             lock = threading.Lock()
@@ -1035,6 +1040,7 @@ class TestMemoryRepositoryAndMigrations(unittest.TestCase):
     def test_multi_version_migration_non_overwrite_and_failure_recovery(self):
         import sqlite3
         import tempfile
+
         from infrastructure.migrations import DEFAULT_MIGRATIONS, Migration, SQLiteMigrator
         from modules.memory import MigrationError
 
@@ -1084,6 +1090,7 @@ class TestMemoryRepositoryAndMigrations(unittest.TestCase):
     def test_unsupported_future_schema_version_rejected(self):
         import sqlite3
         import tempfile
+
         from infrastructure.migrations import SQLiteMigrator
         from modules.memory import UnsupportedSchemaVersionError
 
@@ -1105,8 +1112,10 @@ class TestMemoryRepositoryAndMigrations(unittest.TestCase):
         import sqlite3
         import tempfile
         import threading
+
         from infrastructure.sqlite_memory import SQLiteMemoryRepository
-        from modules.memory import InMemoryMemoryRepository, MemoryError, Module as MemoryModule
+        from modules.memory import InMemoryMemoryRepository, MemoryError
+        from modules.memory import Module as MemoryModule
 
         with tempfile.TemporaryDirectory() as tmp:
             empty_db = Path(tmp) / "empty.db"
@@ -1166,6 +1175,7 @@ class TestPersistentTaskOrchestration(unittest.IsolatedAsyncioTestCase):
     async def test_restart_recovery_skips_completed_and_gates_uncertain_steps(self):
         import tempfile
         import threading
+
         from core.ports.tasks import StepOutcome, TaskRecord, TaskStatus, TaskStep
         from core.tasks import TaskOrchestrator
         from infrastructure.sqlite_tasks import SQLiteTaskRepository
@@ -1393,6 +1403,7 @@ class TestTaskAPIAndSecurity(unittest.IsolatedAsyncioTestCase):
     async def test_1_duplicate_execution_two_workers_claim_same_task(self):
         import tempfile
         import threading
+
         from core.ports.tasks import TaskStatus
         from core.tasks import TaskOrchestrator
         from infrastructure.sqlite_tasks import SQLiteTaskRepository
@@ -1464,6 +1475,7 @@ class TestTaskAPIAndSecurity(unittest.IsolatedAsyncioTestCase):
     async def test_3_crash_window_after_external_op_before_checkpoint(self):
         import tempfile
         import threading
+
         from core.ports.tasks import TaskStatus
         from core.tasks import TaskOrchestrator
         from infrastructure.sqlite_tasks import SQLiteTaskRepository
@@ -1630,6 +1642,7 @@ class TestTaskAPIAndSecurity(unittest.IsolatedAsyncioTestCase):
     def test_6_lease_fencing_blocks_stale_worker_commit(self):
         import tempfile
         import threading
+
         from core.ports.tasks import TaskLeaseLostError, TaskRecord, TaskStatus, TaskStep
         from core.tasks import InMemoryTaskRepository
         from infrastructure.sqlite_tasks import SQLiteTaskRepository
@@ -1745,6 +1758,7 @@ class TestBackgroundIntelligencePromotion(unittest.IsolatedAsyncioTestCase):
     async def test_instant_stays_immediate_and_background_promotes_to_persistent_task(self):
         import tempfile
         import threading
+
         from core.ports.tasks import TaskStatus
         from core.tasks import TaskOrchestrator
         from infrastructure.sqlite_tasks import SQLiteTaskRepository
@@ -1813,6 +1827,7 @@ class TestBackgroundIntelligencePromotion(unittest.IsolatedAsyncioTestCase):
     async def test_phase2_conversation_concurrency_and_context_consistency(self):
         import tempfile
         import threading
+
         from core.ports.tasks import TaskStatus
         from core.tasks import TaskOrchestrator
         from infrastructure.sqlite_memory import SQLiteMemoryRepository
@@ -1976,6 +1991,7 @@ class TestBackgroundIntelligencePromotion(unittest.IsolatedAsyncioTestCase):
     async def test_phase2_crash_recovery_during_ai_tool_and_memory_persistence(self):
         import tempfile
         import threading
+
         from core.ports.tasks import TaskStatus
         from core.tasks import TaskOrchestrator
         from infrastructure.sqlite_memory import SQLiteMemoryRepository
@@ -2116,6 +2132,7 @@ class TestPluginCapabilityAndAuthorization(unittest.IsolatedAsyncioTestCase):
     def test_plugin_discovery_validation_trust_and_failure_isolation(self):
         import json
         import tempfile
+
         from core.plugins import PluginError, PluginManager
         from core.tools import ToolRegistry
 
@@ -2308,6 +2325,7 @@ class TestPluginCapabilityAndAuthorization(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_tool_cancellation_reports_uncertain_not_cancelled(self):
         import threading
+
         from core.ports.tasks import StepOutcome, TaskStatus
         from core.tasks import InMemoryTaskRepository, TaskOrchestrator
         from core.tools import ToolRegistry
@@ -2351,10 +2369,11 @@ class TestPluginCapabilityAndAuthorization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(orch.recover_on_startup(), [])
 
     async def test_builtin_tool_classification_audit_and_unclassified_blocked(self):
+        import threading
+
         from core.router import build_creed_engine
         from modules.base_ai import MockLLMProvider
         from modules.memory import Module as MemoryModule
-        import threading
 
         lock = threading.Lock()
         mem = MemoryModule(lock, allow_in_memory=True, legacy_json="__nonexistent__.json")
@@ -2391,6 +2410,7 @@ class TestPluginCapabilityAndAuthorization(unittest.IsolatedAsyncioTestCase):
         import json
         import os
         import tempfile
+
         from core.plugins import PluginManager
         from core.tools import ToolRegistry
 
@@ -2413,7 +2433,7 @@ class TestPluginCapabilityAndAuthorization(unittest.IsolatedAsyncioTestCase):
             bad_caps = pdir / "bad_caps"
             bad_caps.mkdir()
             (bad_caps / "plugin.json").write_text(
-                json.dumps({"name": "bad_caps", "version": "1.0.0", "entrypoint": "m.py:register", "capabilities": "shell_exec"}), 
+                json.dumps({"name": "bad_caps", "version": "1.0.0", "entrypoint": "m.py:register", "capabilities": "shell_exec"}),
                 encoding="utf-8",
             )
             (bad_caps / "m.py").write_text("def register(reg): pass\n", encoding="utf-8")
@@ -2553,6 +2573,7 @@ class TestPluginCapabilityAndAuthorization(unittest.IsolatedAsyncioTestCase):
     async def test_phase3_task_recovery_before_during_after_execution(self):
         import tempfile
         import threading
+
         from core.ports.tasks import StepOutcome, TaskRecord, TaskStatus, TaskStep
         from core.tasks import TaskOrchestrator
         from infrastructure.sqlite_tasks import SQLiteTaskRepository
@@ -2616,9 +2637,11 @@ class TestIntelligentMemoryRetrieval(unittest.TestCase):
     """Tranche 4.1: BM25 relevance, recency decay, dedup, conflict surfacing, bounded queries, and prompt-injection safety."""
 
     def test_relevance_ranking_and_recency_decay(self):
-        from datetime import datetime, timedelta
         import threading
-        from modules.memory import InMemoryMemoryRepository, Module as MemoryModule
+        from datetime import datetime, timedelta
+
+        from modules.memory import InMemoryMemoryRepository
+        from modules.memory import Module as MemoryModule
 
         now = datetime(2026, 11, 22, 12, 0, 0)
         repo = InMemoryMemoryRepository()
@@ -2657,9 +2680,11 @@ class TestIntelligentMemoryRetrieval(unittest.TestCase):
         self.assertIn("vacuum", res_gauss[0]["note"])
 
     def test_deduplication_and_conflict_surfacing_without_tag_false_positives(self):
-        from datetime import datetime, timedelta
         import threading
-        from modules.memory import InMemoryMemoryRepository, Module as MemoryModule
+        from datetime import datetime, timedelta
+
+        from modules.memory import InMemoryMemoryRepository
+        from modules.memory import Module as MemoryModule
 
         now = datetime(2026, 11, 22, 12, 0, 0)
         repo = InMemoryMemoryRepository()
@@ -2710,6 +2735,7 @@ class TestIntelligentMemoryRetrieval(unittest.TestCase):
         import sqlite3
         import tempfile
         import threading
+
         from infrastructure.sqlite_memory import SQLiteMemoryRepository
         from modules.memory import Module as MemoryModule
 
@@ -2764,6 +2790,7 @@ class TestOngoingWorkAwareness(unittest.IsolatedAsyncioTestCase):
     async def test_continuity_across_sessions_projects_states_and_no_auto_execution(self):
         import tempfile
         import threading
+
         from core.ports.tasks import StepOutcome, TaskRecord, TaskStatus, TaskStep
         from core.tasks import TaskOrchestrator
         from core.work_context import WorkContextBuilder
