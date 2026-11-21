@@ -1,5 +1,5 @@
 import asyncio
-from core.engine import CreedEngine
+from core.router import build_creed_engine
 from utils.logger import setup_logger
 from version import VERSION
 
@@ -10,7 +10,7 @@ def boot():
     print(f"CREED v{VERSION} initialized")
     logger.info("Boot Sequence Started")
 
-    creed = CreedEngine()
+    creed = build_creed_engine()
     try:
         asyncio.run(creed.run())
     except KeyboardInterrupt:

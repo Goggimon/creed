@@ -37,8 +37,10 @@ CORE_STATE_THEMES = {
     "Idle": ("#67E8F9", "#A78BFA", "#38BDF8", "DORMANT // READY"),
     "Listening": ("#6EE7B7", "#38BDF8", "#34D399", "ATTENTIVE // LISTENING"),
     "Recording": ("#FDBA74", "#F472B6", "#FB923C", "AUDIO CAPTURE"),
-    "Processing": ("#FCD34D", "#FB923C", "#F59E0B", "COMPUTING // THINKING"),
+    "Processing": ("#FCD34D", "#FB923C", "#F59E0B", "COMPUTING // FAST PATH"),
+    "Reasoning": ("#C084FC", "#F472B6", "#A78BFA", "DEEP REASONING // ACTIVE"),
     "Speaking": ("#5EEAD4", "#818CF8", "#2DD4BF", "VOICE SYNTHESIS"),
+    "Interrupted": ("#6EE7B7", "#FDBA74", "#34D399", "BARGE-IN // INTERRUPTED"),
     "Retrying Connection": ("#94A3B8", "#475569", "#64748B", "OFFLINE // RETRYING"),
     "Error": ("#FDA4AF", "#F43F5E", "#FB7185", "SYSTEM FAULT"),
 }
@@ -78,13 +80,11 @@ class RadialHubWidget(QWidget):
 
         # Asymmetric Swiss-Grid spatial anchors around the central intelligence field
         self.nodes = [
-            SpatialAnchor("CONVERSATION", "01", "Intelligence", "Direct Dialogue", "#67E8F9", 1, 0.14, 0.22),
-            SpatialAnchor("JEE", "04", "JEE Workstation", "Scientific Engine", "#A78BFA", 4, 0.12, 0.50),
-            SpatialAnchor("MEMORY", "02", "Knowledge", "Memory Graph", "#5EEAD4", 2, 0.16, 0.78),
-            SpatialAnchor("VSPOTIFY", "03", "VSpotify", "Audio Canvas", "#F472B6", 3, 0.85, 0.22, align_right=True),
-            SpatialAnchor("AUTOMATION", "05", "Task Ops", "Execution Flow", "#FBBF24", 5, 0.88, 0.48, align_right=True),
-            SpatialAnchor("SYSTEMS", "06", "Machine", "macOS Host", "#FB923C", 6, 0.84, 0.72, align_right=True),
-            SpatialAnchor("MODELS", "08", "AI Models", "Local Weights", "#93C5FD", 8, 0.72, 0.88, align_right=True),
+            SpatialAnchor("CONVERSATION", "01", "Intelligence", "Direct Dialogue", "#67E8F9", 1, 0.14, 0.28),
+            SpatialAnchor("MEMORY", "02", "Knowledge", "Memory Graph", "#5EEAD4", 2, 0.16, 0.72),
+            SpatialAnchor("AUTOMATION", "03", "Task Ops", "Execution Flow", "#FBBF24", 3, 0.86, 0.28, align_right=True),
+            SpatialAnchor("SYSTEMS", "04", "Machine", "macOS Host", "#FB923C", 4, 0.86, 0.56, align_right=True),
+            SpatialAnchor("MODELS", "06", "AI Models", "Local Weights", "#93C5FD", 6, 0.74, 0.84, align_right=True),
         ]
 
         self._title_font = QFont("SF Pro Display", 12, QFont.DemiBold)

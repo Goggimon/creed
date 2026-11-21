@@ -7,10 +7,10 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from config.settings import BASE_DIR, config
-from core.engine import CreedEngine
 from core.event_bus import event_bus
+from core.router import build_creed_engine
 
-engine = CreedEngine()
+engine = build_creed_engine()
 
 
 @asynccontextmanager
@@ -100,6 +100,10 @@ async def on_vspotify_command(payload):
     await manager.broadcast({"type": "vspotify_command", "payload": payload})
 
 
+async def on_task_update(payload):
+    await manager.broadcast({"type": "task_update", "payload": payload})
+
+
 event_bus.subscribe("status_change", on_status_change)
 event_bus.subscribe("llm_token", on_llm_token)
 event_bus.subscribe("llm_done", on_llm_done)
@@ -110,6 +114,7 @@ event_bus.subscribe("tool_event", on_tool_event)
 event_bus.subscribe("node_pulse", on_node_pulse)
 event_bus.subscribe("voice_level", on_voice_level)
 event_bus.subscribe("vspotify_command", on_vspotify_command)
+event_bus.subscribe("task_update", on_task_update)
 
 
 @app.get("/")
@@ -125,6 +130,366 @@ def serve_visualizer():
 @app.get("/api/snapshot")
 def get_snapshot():
     return engine.get_system_snapshot()
+
+
+@app.get("/api/metrics")
+def get_metrics():
+    from monitoring.latency_tracker import latency_tracker
+
+    summary = latency_tracker.get_summary()
+    summary["active_tts_backend"] = engine.tts.backend
+    summary["active_llm_provider"] = getattr(engine.ai, "provider_name", "unknown")
+    return summary
+
+
+@app.get("/api/diagnostics/logs")
+def get_diagnostic_logs(turn_id: str = "", limit: int = 40):
+    from utils.logger import get_recent_events
+
+    return {
+        "turn_id": turn_id,
+        "events": get_recent_events(turn_id=turn_id, limit=limit),
+    }
+
+
+# -------- TASK & APPROVAL API (Tranche 5.1) --------
+from typing import Literal, Optional
+from pydantic import BaseModel, Field
+from core.ports.tasks import (
+    ApprovalConflictError,
+    ApprovalExpiredError,
+    ApprovalInvalidatedError,
+    TaskNotFoundError,
+    TaskRecoveryError,
+    TaskStateError,
+    TaskStatus,
+)
+
+
+class TaskStepModel(BaseModel):
+    step_index: int
+    name: str
+    action: str
+    args: dict = Field(default_factory=dict)
+    requires_approval: bool = False
+    outcome: str
+    result: Optional[str] = None
+    error: Optional[str] = None
+    attempts: int = 0
+    max_attempts: int = 1
+    updated_at: str = ""
+
+
+class TaskResponse(BaseModel):
+    id: str
+    conversation_id: str
+    title: str
+    status: str
+    current_step_index: int
+    steps: list[TaskStepModel]
+    created_at: str
+    updated_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error: Optional[str] = None
+
+
+class TaskListResponse(BaseModel):
+    conversation_id: str
+    tasks: list[TaskResponse]
+
+
+class TaskEventModel(BaseModel):
+    id: Optional[int] = None
+    task_id: str
+    event_type: str
+    status: str
+    step_index: Optional[int] = None
+    message: str
+    data: dict = Field(default_factory=dict)
+    timestamp: str
+
+
+class TaskEventsPageResponse(BaseModel):
+    task_id: str
+    items: list[TaskEventModel]
+    total: int
+    offset: int
+    limit: int
+    has_more: bool
+
+
+class TaskStepCreateRequest(BaseModel):
+    name: str
+    action: str
+    args: dict = Field(default_factory=dict)
+    requires_approval: bool = False
+
+
+class TaskCreateRequest(BaseModel):
+    title: str
+    conversation_id: str = "default"
+    steps: list[TaskStepCreateRequest]
+    timeout_s: Optional[float] = None
+
+
+class TaskActionResponse(BaseModel):
+    status: str
+    task: TaskResponse
+
+
+class ApprovalResponse(BaseModel):
+    id: str
+    task_id: str
+    step_index: int
+    action: str
+    args: dict = Field(default_factory=dict)
+    action_summary: str
+    action_payload_hash: str
+    reason: str
+    status: str
+    created_at: str
+    expires_at: Optional[str] = None
+    resolved_at: Optional[str] = None
+    resolved_by: Optional[str] = None
+
+
+class ApprovalListResponse(BaseModel):
+    conversation_id: str
+    approvals: list[ApprovalResponse]
+
+
+class ApprovalResolveRequest(BaseModel):
+    decision: Literal["approve", "reject", "mark_completed"]
+    resolved_by: str = "user"
+
+
+class ApprovalResolveResponse(BaseModel):
+    status: str
+    resolution: str
+    approval: ApprovalResponse
+
+
+def _require_orchestrator():
+    orch = getattr(engine, "task_orchestrator", None)
+    if orch is None:
+        raise HTTPException(status_code=503, detail="Task orchestrator unavailable.")
+    return orch
+
+
+def _to_task_response(task) -> TaskResponse:
+    return TaskResponse(
+        id=task.id,
+        conversation_id=task.conversation_id,
+        title=task.title,
+        status=task.status.value,
+        current_step_index=task.current_step_index,
+        steps=[
+            TaskStepModel(
+                step_index=s.step_index,
+                name=s.name,
+                action=s.action,
+                args=dict(s.args),
+                requires_approval=s.requires_approval,
+                outcome=s.outcome.value,
+                result=s.result,
+                error=s.error,
+                attempts=s.attempts,
+                max_attempts=s.max_attempts,
+                updated_at=s.updated_at,
+            )
+            for s in task.steps
+        ],
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+        started_at=task.started_at,
+        completed_at=task.completed_at,
+        error=task.error,
+    )
+
+
+def _to_approval_response(apr) -> ApprovalResponse:
+    return ApprovalResponse(
+        id=apr.id,
+        task_id=apr.task_id,
+        step_index=apr.step_index,
+        action=apr.action,
+        args=dict(apr.args),
+        action_summary=apr.action_summary,
+        action_payload_hash=apr.action_payload_hash,
+        reason=apr.reason,
+        status=apr.status,
+        created_at=apr.created_at,
+        expires_at=apr.expires_at,
+        resolved_at=apr.resolved_at,
+        resolved_by=apr.resolved_by,
+    )
+
+
+def _get_scoped_task(orch, task_id: str, conversation_id: str):
+    task = orch.repo.get_task(task_id)
+    if not task or task.conversation_id != conversation_id:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return task
+
+
+@app.get("/api/tasks", response_model=TaskListResponse)
+def list_tasks(conversation_id: str = "default", status: str = "", limit: int = 50):
+    orch = _require_orchestrator()
+    statuses = None
+    if status.strip():
+        try:
+            statuses = [TaskStatus(status.strip())]
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid task status: {status}")
+    tasks = orch.repo.list_tasks(
+        conversation_id=conversation_id,
+        statuses=statuses,
+        limit=max(1, min(200, limit)),
+    )
+    return TaskListResponse(
+        conversation_id=conversation_id,
+        tasks=[_to_task_response(t) for t in tasks],
+    )
+
+
+@app.post("/api/tasks", response_model=TaskActionResponse)
+def create_task(payload: TaskCreateRequest):
+    orch = _require_orchestrator()
+    if not payload.title.strip() or not payload.steps:
+        raise HTTPException(status_code=400, detail="Task title and steps are required.")
+    try:
+        task = orch.submit_task(
+            title=payload.title.strip(),
+            steps=[s.model_dump() for s in payload.steps],
+            conversation_id=payload.conversation_id,
+            timeout_s=payload.timeout_s,
+        )
+        return TaskActionResponse(status="ok", task=_to_task_response(task))
+    except TaskRecoveryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/api/tasks/{task_id}", response_model=TaskResponse)
+def get_task(task_id: str, conversation_id: str = "default"):
+    orch = _require_orchestrator()
+    task = _get_scoped_task(orch, task_id, conversation_id)
+    return _to_task_response(task)
+
+
+@app.get("/api/tasks/{task_id}/events", response_model=TaskEventsPageResponse)
+def get_task_events(task_id: str, conversation_id: str = "default", offset: int = 0, limit: int = 50):
+    orch = _require_orchestrator()
+    _get_scoped_task(orch, task_id, conversation_id)
+    safe_offset = max(0, offset)
+    safe_limit = max(1, min(200, limit))
+    items, total = orch.repo.get_events_page(task_id, offset=safe_offset, limit=safe_limit)
+    return TaskEventsPageResponse(
+        task_id=task_id,
+        items=[
+            TaskEventModel(
+                id=e.id,
+                task_id=e.task_id,
+                event_type=e.event_type,
+                status=e.status,
+                step_index=e.step_index,
+                message=e.message,
+                data=dict(e.data),
+                timestamp=e.timestamp,
+            )
+            for e in items
+        ],
+        total=total,
+        offset=safe_offset,
+        limit=safe_limit,
+        has_more=(safe_offset + len(items)) < total,
+    )
+
+
+@app.post("/api/tasks/{task_id}/pause", response_model=TaskActionResponse)
+def pause_task(task_id: str, conversation_id: str = "default"):
+    orch = _require_orchestrator()
+    _get_scoped_task(orch, task_id, conversation_id)
+    try:
+        updated = orch.pause_task(task_id)
+        return TaskActionResponse(status="ok", task=_to_task_response(updated))
+    except TaskStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/tasks/{task_id}/resume", response_model=TaskActionResponse)
+def resume_task(task_id: str, conversation_id: str = "default"):
+    orch = _require_orchestrator()
+    _get_scoped_task(orch, task_id, conversation_id)
+    try:
+        updated = orch.resume_task(task_id)
+        return TaskActionResponse(status="ok", task=_to_task_response(updated))
+    except TaskStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/tasks/{task_id}/cancel", response_model=TaskActionResponse)
+def cancel_task(task_id: str, conversation_id: str = "default"):
+    orch = _require_orchestrator()
+    _get_scoped_task(orch, task_id, conversation_id)
+    try:
+        updated = orch.cancel_task(task_id)
+        return TaskActionResponse(status="ok", task=_to_task_response(updated))
+    except TaskStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/approvals", response_model=ApprovalListResponse)
+def list_pending_approvals(conversation_id: str = "default"):
+    orch = _require_orchestrator()
+    items = orch.repo.list_pending_approvals(conversation_id=conversation_id)
+    return ApprovalListResponse(
+        conversation_id=conversation_id,
+        approvals=[_to_approval_response(a) for a in items],
+    )
+
+
+@app.post("/api/approvals/{approval_id}/resolve", response_model=ApprovalResolveResponse)
+def resolve_approval(
+    approval_id: str,
+    payload: ApprovalResolveRequest,
+    conversation_id: str = "default",
+):
+    orch = _require_orchestrator()
+    existing = orch.repo.get_approval(approval_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Approval not found.")
+    _get_scoped_task(orch, existing.task_id, conversation_id)
+
+    try:
+        if payload.decision == "reject":
+            apr = orch.reject_and_cancel(approval_id, resolved_by=payload.resolved_by)
+            return ApprovalResolveResponse(
+                status="ok",
+                resolution="rejected",
+                approval=_to_approval_response(apr),
+            )
+        mark_done = payload.decision == "mark_completed"
+        apr = orch.approve_and_resume(
+            approval_id,
+            resolved_by=payload.resolved_by,
+            mark_uncertain_completed=mark_done,
+        )
+        return ApprovalResolveResponse(
+            status="ok",
+            resolution="marked_completed" if mark_done else "approved_for_execution",
+            approval=_to_approval_response(apr),
+        )
+    except (ApprovalConflictError, ApprovalExpiredError, ApprovalInvalidatedError, TaskStateError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.post("/api/memory/note")
@@ -404,7 +769,14 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg_type == "chat":
                 text = data.get("text", "")
                 asyncio.create_task(
-                    engine.process_text(text, session_id=session_id, mode=mode)
+                    engine.process_text(
+                        text,
+                        session_id=session_id,
+                        mode=mode,
+                        allow_private_cloud=bool(data.get("allow_private_cloud", False)),
+                        selected_provider=data.get("provider"),
+                        selected_model=data.get("model"),
+                    )
                 )
             elif msg_type == "stop":
                 engine.stop_all()

@@ -211,6 +211,8 @@ def register_tools(registry):
         description="List paired and connected Bluetooth speakers/devices on the Mac.",
         parameters={"type": "object", "properties": {}},
         handler=bt_list_devices,
+        capabilities=["bluetooth_read"],
+        side_effect="read_only",
     )
     registry.register(
         name="bt_connect_device",
@@ -223,6 +225,8 @@ def register_tools(registry):
             "required": ["device"],
         },
         handler=bt_connect_device,
+        capabilities=["bluetooth_control"],
+        side_effect="system_control",
     )
     registry.register(
         name="bt_disconnect_device",
@@ -235,12 +239,16 @@ def register_tools(registry):
             "required": ["device"],
         },
         handler=bt_disconnect_device,
+        capabilities=["bluetooth_control"],
+        side_effect="system_control",
     )
     registry.register(
         name="audio_list_outputs",
         description="List available macOS audio output devices (speakers, multi-output devices, headphones).",
         parameters={"type": "object", "properties": {}},
         handler=audio_list_outputs,
+        capabilities=["audio_read"],
+        side_effect="read_only",
     )
     registry.register(
         name="audio_set_output",
@@ -253,4 +261,6 @@ def register_tools(registry):
             "required": ["device_name"],
         },
         handler=audio_set_output,
+        capabilities=["audio_control"],
+        side_effect="system_control",
     )

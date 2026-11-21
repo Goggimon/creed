@@ -126,12 +126,16 @@ def register_tools(registry):
             },
         },
         handler=phone_connect,
+        capabilities=["adb_connect"],
+        side_effect="external",
     )
     registry.register(
         name="phone_status",
         description="Check connected ADB phone status and battery level.",
         parameters={"type": "object", "properties": {}},
         handler=phone_status,
+        capabilities=["adb_read"],
+        side_effect="read_only",
     )
     registry.register(
         name="phone_launch_app",
@@ -144,6 +148,8 @@ def register_tools(registry):
             "required": ["app"],
         },
         handler=phone_launch_app,
+        capabilities=["adb_control"],
+        side_effect="external",
     )
     registry.register(
         name="phone_media_key",
@@ -156,10 +162,14 @@ def register_tools(registry):
             "required": ["action"],
         },
         handler=phone_media_key,
+        capabilities=["adb_control"],
+        side_effect="external",
     )
     registry.register(
         name="phone_mirror_screen",
         description="Launch scrcpy on the Mac to mirror and control the Android phone screen.",
         parameters={"type": "object", "properties": {}},
         handler=phone_mirror_screen,
+        capabilities=["adb_control"],
+        side_effect="external",
     )

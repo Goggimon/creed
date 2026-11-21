@@ -9,22 +9,26 @@ import numpy as np
 import sounddevice as sd
 from config.settings import config
 from core.event_bus import event_bus
+from monitoring.latency_tracker import latency_tracker
 
 logger = logging.getLogger("CreedTTS")
 
 
 class TTSModule:
-    def __init__(self):
+    def __init__(self, max_queue_size: int = 24):
         self.sample_rate = 22050
         self.piper_path = self._resolve_piper_path()
         self.model_path = self._resolve_model_path()
         self.backend = self._select_backend()
 
-        self.queue = asyncio.Queue()
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=max_queue_size)
         self._interrupted = False
         self._is_playing = False
         self._current_process = None
         self._worker_task = None
+        self._active_turn_id = ""
+        self._epoch = 0
+        self._spoken_by_turn: dict[str, list[str]] = {}
 
         logger.info(f"TTS initialized using backend='{self.backend}'")
 
@@ -74,23 +78,45 @@ class TTSModule:
             self._worker_task = loop.create_task(self._worker_loop())
             logger.info("TTS worker task started")
 
-    def speak(self, text: str):
+    def set_active_turn(self, turn_id: str):
+        self._active_turn_id = turn_id
+        self._spoken_by_turn.setdefault(turn_id, [])
+
+    def get_spoken_text(self, turn_id: str) -> str:
+        return " ".join(self._spoken_by_turn.get(turn_id, [])).strip()
+
+    def speak(self, text: str, turn_id: str = ""):
         clean_text = (
             text.replace("*", "")
-            .replace(":", ".")
+            .replace("`", "")
             .replace("#", "")
             .strip()
         )
         if not clean_text or self.backend == "none":
             return
+        if turn_id and self._active_turn_id and turn_id != self._active_turn_id:
+            return
 
         self._interrupted = False
-        self.queue.put_nowait(clean_text)
-        logger.debug(f"Queued text for TTS ({self.backend}): '{clean_text}'")
+        if turn_id:
+            latency_tracker.mark_tts_queued(turn_id)
 
-    def stop(self):
+        # Backpressure: drop oldest pending chunk if bounded queue is full
+        if self.queue.full():
+            try:
+                self.queue.get_nowait()
+                self.queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+        self.queue.put_nowait((turn_id or self._active_turn_id, clean_text, self._epoch))
+        logger.debug(f"Queued sentence for TTS ({self.backend}): '{clean_text[:50]}'")
+
+    def stop(self, turn_id: str = ""):
+        if turn_id and self._active_turn_id and turn_id != self._active_turn_id:
+            return
         self._interrupted = True
         self._is_playing = False
+        self._epoch += 1
 
         while not self.queue.empty():
             try:
@@ -111,7 +137,7 @@ class TTSModule:
                 logger.error(f"Error terminating TTS process: {e}")
             self._current_process = None
 
-    async def _speak_piper(self, text: str):
+    async def _speak_piper(self, text: str, turn_id: str):
         self._current_process = await asyncio.create_subprocess_exec(
             self.piper_path,
             "-m",
@@ -135,12 +161,14 @@ class TTSModule:
             self._current_process = None
 
         if stdout_data and not self._interrupted:
+            if turn_id:
+                latency_tracker.mark_tts_output_submit(turn_id, backend="piper")
             audio_np = np.frombuffer(stdout_data, dtype=np.int16)
             sd.play(audio_np, self.sample_rate)
 
             total_time = len(audio_np) / self.sample_rate
             elapsed = 0.0
-            chunk_time = 0.05
+            chunk_time = 0.04
             while elapsed < total_time and not self._interrupted:
                 await asyncio.sleep(chunk_time)
                 elapsed += chunk_time
@@ -148,7 +176,7 @@ class TTSModule:
             if self._interrupted:
                 sd.stop()
 
-    async def _speak_macos_say(self, text: str):
+    async def _speak_macos_say(self, text: str, turn_id: str):
         self._current_process = await asyncio.create_subprocess_exec(
             "say",
             "-v",
@@ -159,6 +187,8 @@ class TTSModule:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
+        if turn_id:
+            latency_tracker.mark_tts_dispatch(turn_id, backend="macos_say")
         try:
             await self._current_process.wait()
         except asyncio.CancelledError:
@@ -170,22 +200,28 @@ class TTSModule:
 
     async def _worker_loop(self):
         while True:
-            text = await self.queue.get()
-            if self._interrupted:
+            turn_id, text, item_epoch = await self.queue.get()
+            if (
+                self._interrupted
+                or item_epoch != self._epoch
+                or (turn_id and self._active_turn_id and turn_id != self._active_turn_id)
+            ):
                 self.queue.task_done()
                 continue
 
             self._is_playing = True
-            logger.info(f"Synthesizing speech ({self.backend}): '{text}'")
+            logger.info(f"Synthesizing speech ({self.backend}): '{text[:60]}'")
 
             try:
                 await event_bus.publish("status_change", "Speaking")
 
                 if self.backend == "piper":
-                    await self._speak_piper(text)
+                    await self._speak_piper(text, turn_id)
                 elif self.backend == "macos_say":
-                    await self._speak_macos_say(text)
+                    await self._speak_macos_say(text, turn_id)
 
+                if not self._interrupted and item_epoch == self._epoch and turn_id:
+                    self._spoken_by_turn.setdefault(turn_id, []).append(text)
             except Exception as e:
                 logger.error(f"TTS execution failed: {e}")
                 await event_bus.publish("error", f"TTS error: {str(e)}")
@@ -193,5 +229,5 @@ class TTSModule:
                 self._is_playing = False
                 self.queue.task_done()
 
-            if self.queue.empty() and not self._interrupted:
+            if self.queue.empty() and not self._interrupted and item_epoch == self._epoch:
                 await event_bus.publish("status_change", "Idle")

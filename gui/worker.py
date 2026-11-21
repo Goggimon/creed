@@ -14,6 +14,7 @@ class WebSocketWorker(QThread):
     error_received = Signal(str)
     connected_signal = Signal()
     disconnected_signal = Signal()
+    task_update_received = Signal(dict)
 
     def __init__(self, url="ws://127.0.0.1:8000/ws"):
         super().__init__()
@@ -81,6 +82,8 @@ class WebSocketWorker(QThread):
                                     self.error_received.emit(data.get("message", "Unknown error"))
                                 elif msg_type == "done":
                                     self.done_received.emit()
+                                elif msg_type == "task_update":
+                                    self.task_update_received.emit(data.get("payload") or {})
                             elif msg.type in (
                                 aiohttp.WSMsgType.CLOSED,
                                 aiohttp.WSMsgType.ERROR,

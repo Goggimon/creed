@@ -20,13 +20,11 @@ COMMANDS = [
     ("00  Overview Hub", "tab", 0),
     ("01  Intelligence (Conversation)", "tab", 1),
     ("02  Memory & Knowledge Engine", "tab", 2),
-    ("03  VSpotify Visualizer", "tab", 3),
-    ("04  JEE Tutor Workstation", "tab", 4),
-    ("05  Task & Automation Engine", "tab", 5),
-    ("06  Machine Control (macOS)", "tab", 6),
-    ("07  Tools Registry", "tab", 7),
-    ("08  AI Models Registry", "tab", 8),
-    ("09  System Configuration", "tab", 9),
+    ("03  Task & Automation Engine", "tab", 3),
+    ("04  Machine Control (macOS)", "tab", 4),
+    ("05  Tools Registry", "tab", 5),
+    ("06  AI Models Registry", "tab", 6),
+    ("07  System Configuration", "tab", 7),
 ]
 
 

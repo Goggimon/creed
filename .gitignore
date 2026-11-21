@@ -5,6 +5,7 @@ __pycache__/
 *.save
 *.save.*
 *.db
+*.db.bak.*
 *.sqlite
 *.log
 logs/
@@ -19,3 +20,4 @@ structure.txt
 piper/
 models/
 CREED.app/
+*.egg-info/

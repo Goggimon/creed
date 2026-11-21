@@ -274,9 +274,42 @@ class SystemsTab(QWidget):
         self.grid = QGridLayout()
         self.grid.setSpacing(12)
         layout.addLayout(self.grid)
+
+        perf_hdr = QLabel("PIPELINE OBSERVABILITY // p50 • p95 • p99")
+        perf_hdr.setObjectName("section_header")
+        layout.addWidget(perf_hdr)
+
+        self.perf_card = QFrame()
+        self.perf_card.setObjectName("panel_card")
+        p_lay = QVBoxLayout(self.perf_card)
+        p_lay.setContentsMargins(14, 10, 14, 10)
+        p_lay.setSpacing(6)
+
+        turn_row = QHBoxLayout()
+        turn_lbl = QLabel("INSPECT TURN TIMELINE")
+        turn_lbl.setObjectName("section_header")
+        self.turn_selector = QComboBox()
+        self.turn_selector.setStyleSheet(
+            "background-color: #10151B; border: 1px solid #22303F; border-radius: 6px; padding: 4px 8px; color: #E6EDF2; font-family: 'Menlo', monospace; font-size: 11px;"
+        )
+        self.turn_selector.currentIndexChanged.connect(self._render_selected_turn)
+        turn_row.addWidget(turn_lbl)
+        turn_row.addWidget(self.turn_selector, 1)
+        p_lay.addLayout(turn_row)
+
+        self.perf_label = QLabel("Collecting pipeline latency samples...")
+        self.perf_label.setObjectName("meta_label")
+        self.perf_label.setWordWrap(True)
+        p_lay.addWidget(self.perf_label)
+
+        self.timeline_label = QLabel("Select a turn to inspect overlapping stage intervals.")
+        self.timeline_label.setStyleSheet("color: #93C5FD; font-family: 'Menlo', monospace; font-size: 11px;")
+        self.timeline_label.setWordWrap(True)
+        p_lay.addWidget(self.timeline_label)
+        layout.addWidget(self.perf_card)
         layout.addStretch()
 
-    def update_data(self, systems: list):
+    def update_data(self, systems: list, latency: dict = None, router: dict = None):
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget():
@@ -295,7 +328,7 @@ class SystemsTab(QWidget):
             state = sys_info.get("state", "Unknown")
             state_lbl = QLabel(f"● {state.upper()}")
             color = "#22C55E" if state in ("Online", "Configured") else "#F59E0B"
-            state_lbl.setStyleSheet(f"color: {color}; font-family: 'SF Mono', monospace; font-size: 11px;")
+            state_lbl.setStyleSheet(f"color: {color}; font-family: 'Menlo', monospace; font-size: 11px;")
 
             desc = QLabel(sys_info.get("description", ""))
             desc.setWordWrap(True)
@@ -310,6 +343,74 @@ class SystemsTab(QWidget):
             v.addWidget(desc)
             v.addWidget(detail)
             self.grid.addWidget(card, idx // 2, idx % 2)
+
+        if latency:
+            stages = latency.get("stages", {})
+            counts = latency.get("path_counts", {})
+            tts_backend = latency.get("tts_backend") or "unknown"
+            tts_metric_type = latency.get("tts_metric_type") or "unmeasured"
+            r_info = router or {}
+            lines = [
+                f"Active Route: {r_info.get('path', 'instant').upper()} ({r_info.get('model', '--')})  |  "
+                f"TTS: {tts_backend} ({tts_metric_type})  |  "
+                f"Counts: Instant {counts.get('instant', 0)} • Intelligent {counts.get('intelligent', 0)} • Background {counts.get('background', 0)}"
+            ]
+            for key, label in (
+                ("vad_ms", "VAD"),
+                ("stt_partial_ms", "Partial STT"),
+                ("stt_final_ms", "Final STT"),
+                ("classifier_ms", "Classifier"),
+                ("memory_retrieval_ms", "Memory Retrieval"),
+                ("llm_ttft_ms", "LLM TTFT"),
+                ("llm_tok_s", "Throughput (tok/s)"),
+                ("tts_dispatch_ms", "TTS Dispatch (say)"),
+                ("tts_output_submit_ms", "TTS Output Submit (piper)"),
+                ("e2e_dispatch_ms", "E2E Dispatch (say)"),
+                ("e2e_output_submit_ms", "E2E Output Submit (piper)"),
+                ("barge_in_ms", "Barge-In"),
+            ):
+                s = stages.get(key, {})
+                if s.get("count", 0) > 0:
+                    unit = "" if key == "llm_tok_s" else "ms"
+                    mtype = f" [{s['metric_type']}]" if s.get("metric_type") else ""
+                    lines.append(
+                        f"{label:<24} last={s['last']}{unit}  p50={s['p50']}{unit}  p95={s['p95']}{unit}  p99={s['p99']}{unit}{mtype}"
+                    )
+            self.perf_label.setText("\n".join(lines))
+            self._recent_turns = latency.get("recent_turns", [])
+            if not self.turn_selector.view().isVisible():
+                current_tid = self.turn_selector.currentData()
+                target_ids = [t.get("turn_id", "") for t in self._recent_turns if t.get("turn_id")]
+                existing_ids = [self.turn_selector.itemData(i) for i in range(self.turn_selector.count())]
+                if target_ids != existing_ids:
+                    self.turn_selector.blockSignals(True)
+                    self.turn_selector.clear()
+                    for t in self._recent_turns:
+                        tid = t.get("turn_id", "")
+                        if tid:
+                            self.turn_selector.addItem(f"TURN #{tid} ({t.get('path', '')} • {t.get('model', '')})", tid)
+                    if current_tid in target_ids:
+                        self.turn_selector.setCurrentIndex(target_ids.index(current_tid))
+                    self.turn_selector.blockSignals(False)
+            self._render_selected_turn()
+
+    def _render_selected_turn(self):
+        turns = getattr(self, "_recent_turns", [])
+        tid = self.turn_selector.currentData()
+        if not turns or not tid:
+            self.timeline_label.setText("No turn timelines recorded yet.")
+            return
+        turn = next((t for t in turns if t.get("turn_id") == tid), None)
+        if not turn:
+            return
+        timeline = turn.get("timeline", [])
+        out = [f"TURN #{tid}  (intervals may overlap; TOTAL is wall-clock span)"]
+        for idx, iv in enumerate(timeline):
+            branch = "└──" if idx == len(timeline) - 1 else "├──"
+            out.append(
+                f"{branch} {iv['stage']:<18} {iv['duration_ms']:>6.1f} ms  [{iv['start_ms']}..{iv['end_ms']} ms]"
+            )
+        self.timeline_label.setText("\n".join(out))
 
 
 class ToolsTab(QWidget):

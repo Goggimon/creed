@@ -9,6 +9,7 @@
 * **Local LLM Registry & Tool-Calling Brain**:
   * **AI Models Tab** (`gui/components/tabs.py`): Inspect installed Ollama models, switch active models via dropdown or one-click table actions, and pull new weights directly from the UI.
   * **Multi-Step Tool Loop** (`core/engine.py`, `core/tools.py`): Powered by Ollama (`qwen2.5-coder:7b` / `qwen3:8b` on 16 GB Apple Silicon) with `keep_alive: 15m` and `num_ctx: 4096` for fast local responses.
+  * **Privacy-First Local / Cloud Routing** (`intelligence/model_router.py`, `modules/base_ai.py`): Keeps `CREED_ALLOW_CLOUD_ESCALATION=false` and `CREED_CLOUD_PRIVACY_MODE=local_on_private` by default, blocks private context (retrieved memories, ongoing work, local files, personal notes, prior conversation history) from reaching cloud providers without explicit per-turn permission, checks provider tool-calling compatibility, and supports pre-stream local fallback.
 * **Embedded VSpotify Hub** (`modules/vspotify.py`, `gui/components/vspotify_tab.py`):
   * Embeds `https://goggimon.github.io/VSpotify/` inside CREED.
   * Voice and AI tools (`vspotify_playback`, `vspotify_set_visualizer`, `vspotify_set_hud`, `vspotify_customize`, `vspotify_open_tab`) control playback, visualizers, HUD layouts, EQ bands, and theme colors in real time.

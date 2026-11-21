@@ -97,6 +97,8 @@ def register_tools(registry):
             "required": ["action"],
         },
         handler=_playback,
+        capabilities=["vspotify_control"],
+        side_effect="local_write",
     )
 
     registry.register(
@@ -110,6 +112,8 @@ def register_tools(registry):
             "required": ["name"],
         },
         handler=_set_visualizer,
+        capabilities=["vspotify_control"],
+        side_effect="local_write",
     )
 
     registry.register(
@@ -123,6 +127,8 @@ def register_tools(registry):
             "required": ["layout"],
         },
         handler=_set_hud,
+        capabilities=["vspotify_control"],
+        side_effect="local_write",
     )
 
     registry.register(
@@ -142,6 +148,8 @@ def register_tools(registry):
             },
         },
         handler=_customize,
+        capabilities=["vspotify_control"],
+        side_effect="local_write",
     )
 
     registry.register(
@@ -149,4 +157,6 @@ def register_tools(registry):
         description="Switch CREED's main interface directly to the embedded VSpotify player tab.",
         parameters={"type": "object", "properties": {}},
         handler=_open_tab,
+        capabilities=["vspotify_control"],
+        side_effect="local_write",
     )

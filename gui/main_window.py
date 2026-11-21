@@ -22,17 +22,15 @@ from components.chat_view import ChatView
 from components.command_palette import CommandPalette
 from components.global_hotkey import MacGlobalHotkey
 from components.input_bar import InputBar
-from components.jee_tab import JEETutorTab
 from components.radial_hub import CORE_STATE_THEMES, RadialHubWidget
 from components.tabs import (
-    AutomationTab,
     MemoryTab,
     ModelsTab,
     SettingsTab,
     SystemsTab,
     ToolsTab,
 )
-from components.vspotify_tab import VSpotifyTab
+from components.tasks_tab import TasksTab
 
 
 class SpatialCanvasFrame(QFrame):
@@ -109,7 +107,7 @@ class ConnectionOverlay(QFrame):
 
 class ApiWorker(QThread):
     response_ready = Signal(str, dict)
-    api_error = Signal(str)
+    api_error = Signal(str, str)
 
     def __init__(self, method="GET", path="/api/snapshot", payload=None, tag="snapshot"):
         super().__init__()
@@ -120,19 +118,34 @@ class ApiWorker(QThread):
 
     def run(self):
         base = "http://localhost:8000"
-        req_timeout = 95.0 if self.tag == "jee_test" else 10.0
+        req_timeout = 10.0
         try:
             with httpx.Client(timeout=req_timeout) as client:
                 resp = client.request(self.method, f"{base}{self.path}", json=self.payload)
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    detail = ""
+                    try:
+                        detail = resp.json().get("detail", "")
+                    except Exception:
+                        detail = resp.text[:200]
+                    raise RuntimeError(f"HTTP {resp.status_code}: {detail or resp.reason_phrase}")
                 data = resp.json()
                 self.response_ready.emit(self.tag, data)
-                if self.tag not in ("snapshot", "load_convo", "jee_test"):
+                if self.tag not in (
+                    "snapshot",
+                    "load_convo",
+                    "tasks_list",
+                    "task_detail",
+                    "task_events",
+                    "task_events_more",
+                    "approvals_list",
+                    "task_mutate",
+                ):
                     snap = client.get(f"{base}/api/snapshot")
                     snap.raise_for_status()
                     self.response_ready.emit("snapshot", snap.json())
         except Exception as e:
-            self.api_error.emit(str(e))
+            self.api_error.emit(self.tag, str(e))
 
 
 class MainWindow(QMainWindow):
@@ -165,6 +178,7 @@ class MainWindow(QMainWindow):
         self.ws_worker.error_received.connect(self.on_error)
         self.ws_worker.connected_signal.connect(self.on_connected)
         self.ws_worker.disconnected_signal.connect(self.on_disconnected)
+        self.ws_worker.task_update_received.connect(self.on_task_update)
         self.ws_worker.start()
 
         self._clock_timer = QTimer(self)
@@ -357,19 +371,17 @@ class MainWindow(QMainWindow):
         self.memory_tab.new_conversation_requested.connect(self.create_new_conversation)
         self.memory_tab.delete_conversation_requested.connect(self.delete_conversation)
 
-        self.vspotify_tab = VSpotifyTab()
+        self.tasks_tab = TasksTab()
+        self.tasks_tab.refresh_tasks_requested.connect(self.fetch_tasks)
+        self.tasks_tab.select_task_requested.connect(self.fetch_task_detail_and_events)
+        self.tasks_tab.load_more_events_requested.connect(self.fetch_more_task_events)
+        self.tasks_tab.pause_task_requested.connect(self.pause_task)
+        self.tasks_tab.resume_task_requested.connect(self.resume_task)
+        self.tasks_tab.cancel_task_requested.connect(self.cancel_task)
+        self.tasks_tab.refresh_approvals_requested.connect(self.fetch_approvals)
+        self.tasks_tab.resolve_approval_requested.connect(self.resolve_approval)
 
-        self.jee_tab = JEETutorTab()
-        self.jee_tab.jee_prompt_submitted.connect(self.handle_jee_send)
-        self.jee_tab.voice_requested.connect(self.handle_voice_toggle)
-        self.jee_tab.stop_requested.connect(self.stop_generation)
-        self.jee_tab.add_flashcard_requested.connect(self.add_jee_flashcard)
-        self.jee_tab.toggle_flashcard_requested.connect(self.toggle_jee_flashcard)
-        self.jee_tab.delete_flashcard_requested.connect(self.delete_jee_flashcard)
-        self.jee_tab.generate_test_requested.connect(self.generate_jee_test)
-        self.jee_tab.submit_test_requested.connect(self.submit_jee_test)
-
-        self.automation_tab = AutomationTab()
+        self.automation_tab = self.tasks_tab.workflows_tab
         self.automation_tab.run_workflow_requested.connect(self.run_workflow)
         self.automation_tab.create_workflow_requested.connect(self.create_workflow)
         self.automation_tab.delete_workflow_requested.connect(self.delete_workflow)
@@ -393,9 +405,7 @@ class MainWindow(QMainWindow):
             overview_page,
             conv_page,
             self.memory_tab,
-            self.vspotify_tab,
-            self.jee_tab,
-            self.automation_tab,
+            self.tasks_tab,
             self.systems_tab,
             self.tools_tab,
             self.models_tab,
@@ -416,13 +426,11 @@ class MainWindow(QMainWindow):
             ("00 HUB", 0),
             ("01 INTELLIGENCE", 1),
             ("02 MEMORY", 2),
-            ("03 VSPOTIFY", 3),
-            ("04 JEE", 4),
-            ("05 TASKS", 5),
-            ("06 MACHINE", 6),
-            ("07 TOOLS", 7),
-            ("08 MODELS", 8),
-            ("09 CONFIG", 9),
+            ("03 TASKS", 3),
+            ("04 MACHINE", 4),
+            ("05 TOOLS", 5),
+            ("06 MODELS", 6),
+            ("07 CONFIG", 7),
         ]
         dock_lay.addStretch()
         for label, idx in nav_items:
@@ -472,8 +480,9 @@ class MainWindow(QMainWindow):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
         if index == 3 and self._is_connected:
-            self.vspotify_tab.ensure_loaded()
-        if index in (2, 3, 4, 5, 6, 7, 8, 9) and self._is_connected:
+            self.fetch_tasks("")
+            self.fetch_approvals()
+        if index in (2, 3, 4, 5, 6, 7) and self._is_connected:
             self.fetch_snapshot()
 
     def apply_styles(self):
@@ -500,6 +509,7 @@ class MainWindow(QMainWindow):
     def _run_api(self, method: str, path: str, payload: dict = None, tag: str = "snapshot"):
         worker = ApiWorker(method=method, path=path, payload=payload, tag=tag)
         worker.response_ready.connect(self._on_api_response)
+        worker.api_error.connect(self._on_api_error)
         worker.finished.connect(
             lambda w=worker: self._active_api_workers.remove(w)
             if w in self._active_api_workers
@@ -508,9 +518,35 @@ class MainWindow(QMainWindow):
         self._active_api_workers.append(worker)
         worker.start()
 
+    def _on_api_error(self, tag: str, err: str):
+        if tag in ("tasks_list", "task_detail", "task_events", "task_events_more", "approvals_list", "task_mutate"):
+            self.tasks_tab.show_error(err)
+            if tag == "task_mutate":
+                self.fetch_approvals()
+                self.fetch_tasks("")
+
     def _on_api_response(self, tag: str, data: dict):
         if tag == "snapshot":
             self.on_snapshot_received(data)
+        elif tag == "tasks_list":
+            self.tasks_tab.clear_error()
+            self.tasks_tab.update_tasks(data.get("tasks", []))
+        elif tag == "task_detail":
+            self.tasks_tab.clear_error()
+            self.tasks_tab.update_selected_task(data)
+        elif tag == "task_events":
+            self.tasks_tab.update_task_events(data.get("task_id", ""), data, append=False)
+        elif tag == "task_events_more":
+            self.tasks_tab.update_task_events(data.get("task_id", ""), data, append=True)
+        elif tag == "approvals_list":
+            self.tasks_tab.update_approvals(data.get("approvals", []))
+        elif tag == "task_mutate":
+            self.tasks_tab.clear_error()
+            self.fetch_tasks("")
+            self.fetch_approvals()
+            tid = (data.get("task") or {}).get("id") or (data.get("approval") or {}).get("task_id")
+            if tid:
+                self.fetch_task_detail_and_events(tid)
         elif tag == "load_convo":
             self.chat_view.clear_bubbles()
             self.current_ai_bubble = None
@@ -525,8 +561,58 @@ class MainWindow(QMainWindow):
             self.chat_view.clear_bubbles()
             self.current_ai_bubble = None
             self.switch_tab(1)
-        elif tag == "jee_test":
-            self.jee_tab.load_generated_test(data)
+
+    def fetch_tasks(self, status_filter: str = ""):
+        if not self._is_connected:
+            return
+        qs = f"?conversation_id={self._current_session_id}"
+        if status_filter:
+            qs += f"&status={status_filter}"
+        self._run_api("GET", f"/api/tasks{qs}", tag="tasks_list")
+
+    def fetch_task_detail_and_events(self, task_id: str):
+        if not self._is_connected or not task_id:
+            return
+        self._run_api("GET", f"/api/tasks/{task_id}?conversation_id={self._current_session_id}", tag="task_detail")
+        self._run_api("GET", f"/api/tasks/{task_id}/events?conversation_id={self._current_session_id}&offset=0&limit=50", tag="task_events")
+
+    def fetch_more_task_events(self, task_id: str, offset: int):
+        if not self._is_connected or not task_id:
+            return
+        self._run_api("GET", f"/api/tasks/{task_id}/events?conversation_id={self._current_session_id}&offset={offset}&limit=50", tag="task_events_more")
+
+    def pause_task(self, task_id: str):
+        self._run_api("POST", f"/api/tasks/{task_id}/pause?conversation_id={self._current_session_id}", tag="task_mutate")
+
+    def resume_task(self, task_id: str):
+        self._run_api("POST", f"/api/tasks/{task_id}/resume?conversation_id={self._current_session_id}", tag="task_mutate")
+
+    def cancel_task(self, task_id: str):
+        self._run_api("POST", f"/api/tasks/{task_id}/cancel?conversation_id={self._current_session_id}", tag="task_mutate")
+
+    def fetch_approvals(self):
+        if not self._is_connected:
+            return
+        self._run_api("GET", f"/api/approvals?conversation_id={self._current_session_id}", tag="approvals_list")
+
+    def resolve_approval(self, approval_id: str, decision: str):
+        self._run_api(
+            "POST",
+            f"/api/approvals/{approval_id}/resolve?conversation_id={self._current_session_id}",
+            {"decision": decision, "resolved_by": "user"},
+            tag="task_mutate",
+        )
+
+    def on_task_update(self, payload: dict):
+        conv_id = payload.get("conversation_id")
+        if conv_id and conv_id != self._current_session_id:
+            return
+        if self.stack.currentIndex() == 3 or payload.get("event_type") in ("approval_requested", "approval_granted", "approval_rejected"):
+            self.fetch_tasks("")
+            self.fetch_approvals()
+            tid = payload.get("task_id")
+            if tid and tid == self.tasks_tab._selected_task_id:
+                self.fetch_task_detail_and_events(tid)
 
     def fetch_snapshot(self):
         if self._is_connected:
@@ -581,35 +667,6 @@ class MainWindow(QMainWindow):
     def delete_model(self, model: str):
         self._run_api("POST", "/api/models/delete", {"model": model}, tag="mutate")
 
-    def add_jee_flashcard(self, subject: str, chapter: str, front: str, back: str):
-        self._run_api(
-            "POST",
-            "/api/jee/flashcards",
-            {"subject": subject, "chapter": chapter, "front": front, "back": back},
-            tag="mutate",
-        )
-
-    def toggle_jee_flashcard(self, card_id: int):
-        self._run_api("POST", f"/api/jee/flashcards/{card_id}/toggle", tag="mutate")
-
-    def delete_jee_flashcard(self, card_id: int):
-        self._run_api("DELETE", f"/api/jee/flashcards/{card_id}", tag="mutate")
-
-    def generate_jee_test(self, subject: str, chapter: str, difficulty: str, count: int):
-        self._run_api(
-            "POST",
-            "/api/jee/test/generate",
-            {"subject": subject, "chapter": chapter, "difficulty": difficulty, "count": count},
-            tag="jee_test",
-        )
-
-    def submit_jee_test(self, subject: str, difficulty: str, score: int, total: int):
-        self._run_api(
-            "POST",
-            "/api/jee/test/submit",
-            {"subject": subject, "difficulty": difficulty, "score": score, "total": total},
-            tag="mutate",
-        )
 
     def on_snapshot_received(self, data: dict):
         self.version_label.setText(f"v{data.get('version', '3.5.0')}")
@@ -634,19 +691,16 @@ class MainWindow(QMainWindow):
             self._snapshot_timer.setInterval(5000)
 
         self.memory_tab.update_data(data.get("memory", {}), data.get("conversations", []))
-        self.systems_tab.update_data(data.get("systems", []))
+        self.systems_tab.update_data(
+            data.get("systems", []),
+            data.get("latency", {}),
+            data.get("router", {}),
+        )
         self.tools_tab.update_data(tools, data.get("tool_history", []))
         self.automation_tab.update_data(data.get("workflows", []), tools)
         self.models_tab.update_data(model, ollama_models, pull_info, ollama_ok)
         self.settings_tab.update_data(data.get("config", {}), ollama_models)
-        self.jee_tab.update_data(data)
 
-        for cmd in data.get("vspotify_commands", []):
-            act = cmd.get("action", "")
-            if act == "open_tab":
-                self.switch_tab(3)
-            elif act:
-                self.vspotify_tab.execute_command(act, cmd.get("params", {}))
 
         if not self._history_loaded:
             self._history_loaded = True
@@ -697,13 +751,6 @@ class MainWindow(QMainWindow):
             {"type": "chat", "text": text, "session_id": self._current_session_id}
         )
 
-    def handle_jee_send(self, text: str):
-        self._active_chat_target = "jee"
-        self.radial_hub.pulse_node("JEE")
-        self.ws_worker.send_message(
-            {"type": "chat", "text": text, "session_id": "jee-tutor", "mode": "jee"}
-        )
-
     def handle_voice_toggle(self):
         self.radial_hub.pulse_node("VOICE")
         self.ws_worker.send_message({"type": "voice_toggle"})
@@ -712,17 +759,12 @@ class MainWindow(QMainWindow):
         self.ws_worker.send_message({"type": "stop"})
 
     def append_token(self, token: str):
-        if self._active_chat_target == "jee":
-            self.jee_tab.append_token(token)
-            return
         if self.current_ai_bubble is None:
             self.current_ai_bubble = self.chat_view.add_bubble("", False)
         self.current_ai_bubble.append_text(token)
         self.chat_view.scroll_to_bottom()
 
     def on_response_done(self):
-        if self._active_chat_target == "jee":
-            self.jee_tab.finish_turn()
         self.current_ai_bubble = None
         self.fetch_snapshot()
 
@@ -749,11 +791,15 @@ class MainWindow(QMainWindow):
     def on_connected(self):
         self._is_connected = True
         self.connection_overlay.hide()
+        self.tasks_tab.set_connection_state(True)
         self.on_status_changed("Idle")
         self.fetch_snapshot()
+        self.fetch_tasks("")
+        self.fetch_approvals()
 
     def on_disconnected(self):
         self._is_connected = False
+        self.tasks_tab.set_connection_state(False)
         self.connection_overlay.setGeometry(self.workspace_frame.rect())
         self.connection_overlay.show()
         self.connection_overlay.raise_()

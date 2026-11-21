@@ -162,6 +162,8 @@ def register_tools(registry):
             "required": ["app_name"],
         },
         handler=mac_open_app,
+        capabilities=["mac_app_control"],
+        side_effect="system_control",
     )
     registry.register(
         name="mac_open_url",
@@ -174,12 +176,16 @@ def register_tools(registry):
             "required": ["url"],
         },
         handler=mac_open_url,
+        capabilities=["browser_open"],
+        side_effect="external",
     )
     registry.register(
         name="mac_list_running_apps",
         description="List currently running GUI applications on the user's Mac.",
         parameters={"type": "object", "properties": {}},
         handler=mac_list_running_apps,
+        capabilities=["mac_read"],
+        side_effect="read_only",
     )
     registry.register(
         name="mac_close_app",
@@ -192,12 +198,17 @@ def register_tools(registry):
             "required": ["app_name"],
         },
         handler=mac_close_app,
+        capabilities=["mac_app_control"],
+        side_effect="system_control",
+        requires_approval=True,
     )
     registry.register(
         name="mac_clipboard_read",
         description="Read the current text contents of the Mac clipboard.",
         parameters={"type": "object", "properties": {}},
         handler=mac_clipboard_read,
+        capabilities=["clipboard_read"],
+        side_effect="read_only",
     )
     registry.register(
         name="mac_clipboard_write",
@@ -210,12 +221,16 @@ def register_tools(registry):
             "required": ["text"],
         },
         handler=mac_clipboard_write,
+        capabilities=["clipboard_write"],
+        side_effect="local_write",
     )
     registry.register(
         name="mac_system_info",
         description="Get Mac battery status, charging state, system uptime, and home disk space.",
         parameters={"type": "object", "properties": {}},
         handler=mac_system_info,
+        capabilities=["mac_read"],
+        side_effect="read_only",
     )
     registry.register(
         name="fs_search_files",
@@ -229,6 +244,8 @@ def register_tools(registry):
             "required": ["query"],
         },
         handler=fs_search_files,
+        capabilities=["filesystem_read"],
+        side_effect="read_only",
     )
     registry.register(
         name="fs_write_file",
@@ -243,6 +260,8 @@ def register_tools(registry):
             "required": ["path", "content"],
         },
         handler=fs_write_file,
+        capabilities=["filesystem_write"],
+        side_effect="local_write",
     )
     registry.register(
         name="fs_read_file",
@@ -255,6 +274,8 @@ def register_tools(registry):
             "required": ["path"],
         },
         handler=fs_read_file,
+        capabilities=["filesystem_read"],
+        side_effect="read_only",
     )
     registry.register(
         name="run_python_file",
@@ -267,4 +288,7 @@ def register_tools(registry):
             "required": ["path"],
         },
         handler=run_python_file,
+        capabilities=["shell_exec"],
+        side_effect="system_control",
+        requires_approval=True,
     )
