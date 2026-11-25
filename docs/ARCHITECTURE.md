@@ -102,3 +102,24 @@ CREED's architecture is evaluated against six concrete capabilities:
   - `.venv/bin/python -m unittest discover -s tests -v` (Python `3.12.16` local environment): **82/82 passed** (including all 6 Tranche 4.4 tests and all FastAPI/PySide6 tests, `0` skipped, `0` failed).
   - `.venv/bin/ruff check intelligence monitoring config utils tests`: **All checks passed** (`0` errors).
   - `.venv/bin/mypy intelligence monitoring config`: **No issues** (`0` errors).
+
+## 8. Tranche 4.5 — Routing Controls, Settings Persistence, Lifecycle & Dormant Isolation (COMPLETE)
+
+- **Status:** **COMPLETE** (accepted & frozen; verified `87/87` passing in local Python `3.12.16` `.venv` with `0` failures and `0` skips, macOS `runcreed.py` lifecycle verified).
+- **GUI Routing Controls (`gui/components/input_bar.py`, `gui/main_window.py`, `core/engine.py`):**
+  - `01 INTELLIGENCE` `InputBar` exposes independent per-turn `provider` and `model` selectors populated from `get_system_snapshot()["provider_catalog"]` and `ollama_models`, passing `provider` and `model` in `/ws` `"chat"` payloads while keeping provider selection, model selection, cloud escalation, and single-turn private-cloud consent strictly separate.
+  - Manual local selection never escalates to cloud; mid-conversation cloud switches continue to treat prior `history` as private under `local_on_private`.
+- **Canonical Settings & Atomic `.env` Persistence (`api/server.py`, `gui/components/tabs.py`):**
+  - `POST /api/settings` validates `allow_cloud_escalation`, `cloud_privacy_mode`, `local_provider`, `cloud_provider`, `cloud_model`, `ollama_model`, `ollama_endpoint`, `macos_tts_voice`, `macos_tts_rate`, and `phone_adb_target`, performs atomic temp-file + `os.replace()` updates preserving unrelated `.env` keys and comments, and applies live `config` updates only after disk persistence succeeds (returning `HTTP 422`/`500` without mutating live `config` on failure).
+  - `SettingsTab` exposes canonical routing/privacy fields and displays explicit save success or failure status.
+- **Deterministic Shutdown & Repository Closure (`gui/main_window.py`, `core/engine.py`, `infrastructure/sqlite_memory.py`, `infrastructure/sqlite_tasks.py`):**
+  - `MainWindow.closeEvent()` removes `os._exit(0)` and executes a bounded shutdown sequence: disable input (`_shutting_down`), stop timers, signal `MacGlobalHotkey` and `WebSocketWorker` to stop, wait with bounded timeouts (`500 ms` / `800 ms` / `500 ms` per active `ApiWorker`), and call `QApplication.quit()`.
+  - `SQLiteMemoryRepository.close()` and `SQLiteTaskRepository.close()` perform passive WAL checkpoints and close connections cleanly during `CreedEngine.shutdown()`.
+- **Dormant-Mode Runtime Isolation (`core/engine.py`, `core/router.py`, `api/server.py`, `tests/test_creed_v2_architecture.py`):**
+  - Removed active `modules.jee_tutor` imports, `vspotify` queue/tool/snapshot hooks, and `/api/jee/*` + `/api/vspotify/*` routes while keeping dormant source files untouched on disk and preserving `MemoryRepository` legacy DB migration compatibility.
+- **Known Limitations:**
+  - Live voice STT operation remains unverified in automated tests because `STTEngine` logs `[STT] Failed to load STT model: Server disconnected without sending a response.` when `mlx_whisper` is absent and `tiny.en` is not cached locally; requires separate verification with a locally cached model or `mlx_whisper`.
+- **Verification Results:**
+  - `.venv/bin/python -m unittest discover -s tests -v` (Python `3.12.16` local environment): **87/87 passed** (`0` failed, `0` skipped).
+  - All Tranche 4.5-introduced `ruff` and `mypy` issues resolved without `type: ignore`; pre-existing `core/`/`api/`/`modules/`/`gui/` findings deferred to Tranche 4.6.
+  - `runcreed.py` verified locally on macOS (backend startup, UI connection, clean shutdown with zero orphaned `uvicorn` processes).

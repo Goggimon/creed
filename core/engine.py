@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import re
 import threading
 import time
@@ -181,11 +182,10 @@ class CreedEngine:
         self.model_router = ModelRouter()
         self._speculative_cache = None
         self._speculative_rev = 0
-        self._last_route = {"path": "instant", "model": "", "reason": ""}
+        self._last_route: Dict[str, Any] = {"path": "instant", "model": "", "reason": ""}
 
         self.activity_log = deque(maxlen=50)
         self.tool_history = deque(maxlen=30)
-        self.vspotify_queue = deque(maxlen=25)
         self.installed_model_names: List[str] = []
         self.model_pull_status = {
             "active": False,
@@ -258,11 +258,7 @@ class CreedEngine:
         self.stt.stop_listening()
 
     def get_history(self, session_id: str = "default", mode: str = "default") -> list:
-        if mode == "jee":
-            from modules.jee_tutor import build_jee_system_prompt, pick_reasoning_model
-            prompt_msg = build_jee_system_prompt(pick_reasoning_model(self.installed_model_names))
-        else:
-            prompt_msg = build_system_prompt(self.ai.model)
+        prompt_msg = build_system_prompt(self.ai.model)
         if session_id not in self.sessions:
             msgs = [prompt_msg]
             memory_mod = self.modules.get("memory")
@@ -285,7 +281,6 @@ class CreedEngine:
         event_bus.subscribe("speech_transcribed", self._on_speech_transcribed)
         event_bus.subscribe("barge_in_detected", self._on_barge_in)
         event_bus.subscribe("status_change", self._on_status_change)
-        event_bus.subscribe("vspotify_command", self._on_vspotify_command)
 
         def handle_wake():
             logger.info("Wake word callback triggered in detector thread")
@@ -315,6 +310,19 @@ class CreedEngine:
         self.tts.stop()
         self.stt.stop_listening()
         self.wake.close()
+        memory_mod = self.modules.get("memory")
+        mem_repo = (getattr(memory_mod, "repo", None) or getattr(memory_mod, "repository", None)) if memory_mod else None
+        if mem_repo is not None and hasattr(mem_repo, "close"):
+            try:
+                mem_repo.close()
+            except Exception as exc:
+                log_event("CreedEngine", "memory_repo_close_failed", level="WARNING", exc=exc)
+        task_repo = getattr(self.task_orchestrator, "repo", None) if self.task_orchestrator else None
+        if task_repo is not None and hasattr(task_repo, "close"):
+            try:
+                task_repo.close()
+            except Exception as exc:
+                log_event("CreedEngine", "task_repo_close_failed", level="WARNING", exc=exc)
 
     def get_system_snapshot(self) -> dict:
         memory_mod = self.modules.get("memory")
@@ -336,29 +344,38 @@ class CreedEngine:
 
         self.installed_model_names = probe_data.get("installed_model_names", [])
 
-        from pathlib import Path
-        from modules.jee_tutor import PYQ_VAULT, SVG_TEMPLATES, pick_reasoning_model
-
-        jee_model = pick_reasoning_model(self.installed_model_names)
-
-        vspotify_cmds = []
-        while self.vspotify_queue:
-            vspotify_cmds.append(self.vspotify_queue.popleft())
+        local_providers, cloud_providers, active_pname, active_ptier, _ = self._get_provider_catalog()
+        provider_catalog = {
+            "active_provider": active_pname,
+            "active_tier": active_ptier,
+            "local": [
+                {
+                    "name": p["name"],
+                    "tier": "local",
+                    "supports_tools": bool(p.get("supports_tools", True)),
+                    "default_model": p.get("default_model", ""),
+                }
+                for p in local_providers
+            ],
+            "cloud": [
+                {
+                    "name": p["name"],
+                    "tier": "cloud",
+                    "supports_tools": bool(p.get("supports_tools", False)),
+                    "default_model": p.get("default_model", ""),
+                }
+                for p in cloud_providers
+            ],
+        }
 
         return {
             "version": config.version,
             "model": self.ai.model,
-            "jee_model": jee_model,
             "ollama_online": probe_data.get("ollama_online", False),
             "ollama_detail": probe_data.get("ollama_detail", ""),
             "ollama_models": probe_data.get("ollama_models", []),
             "model_pull": dict(self.model_pull_status),
-            "vspotify_available": Path(config.vspotify_dir).exists(),
-            "vspotify_commands": vspotify_cmds,
-            "pyq_vault": PYQ_VAULT,
-            "svg_templates": SVG_TEMPLATES,
-            "jee_flashcards": memory_mod.list_flashcards() if memory_mod else [],
-            "jee_tests": memory_mod.list_jee_tests() if memory_mod else [],
+            "provider_catalog": provider_catalog,
             "latency": latency_tracker.get_summary(),
             "router": dict(self._last_route),
             "uptime_seconds": int(time.monotonic() - self.start_time),
@@ -402,10 +419,16 @@ class CreedEngine:
             "config": {
                 "ollama_model": self.ai.model,
                 "ollama_endpoint": self.ai.endpoint,
+                "local_provider": config.local_provider,
+                "cloud_provider": config.cloud_provider,
+                "cloud_model": config.cloud_model,
+                "allow_cloud_escalation": bool(config.allow_cloud_escalation),
+                "cloud_privacy_mode": config.cloud_privacy_mode,
                 "macos_tts_voice": config.macos_tts_voice,
                 "macos_tts_rate": config.macos_tts_rate,
                 "phone_adb_target": config.phone_adb_target,
                 "porcupine_configured": bool(config.porcupine_access_key),
+                "groq_configured": bool(os.getenv("GROQ_API_KEY")),
             },
         }
 
@@ -581,9 +604,6 @@ class CreedEngine:
         await self._emit_activity("VOICE", f"Transcribed: {text[:40]}")
         await self.process_text(text, t_stt_done=time.monotonic())
 
-    async def _on_vspotify_command(self, payload: dict):
-        self.vspotify_queue.append(payload)
-
     def _on_status_change(self, state: str):
         if state == "Speaking" and self._loop:
             self.stt.start_barge_in_monitor(self._loop)
@@ -742,22 +762,21 @@ class CreedEngine:
         else:
             prefetched_memories = None
 
-        # 1. Fast intent router for exact built-in shortcuts (skip in JEE tutor mode)
-        if mode != "jee":
-            intent, module = self.router.dispatch(text)
-            if module:
-                logger.info(f"Routed intent '{intent}' to module '{module.name}'")
-                try:
-                    response = module.handle(intent, text, self.context)
-                    if response:
-                        node = "MEMORY" if module.name == "memory" else "SYSTEMS"
-                        await self._emit_activity(node, f"Handled '{intent}'")
-                        await event_bus.publish("llm_token", response)
-                        await event_bus.publish("llm_done")
-                        self.tts.speak(response, turn_id=turn_id)
-                        return
-                except Exception as e:
-                    logger.error(f"Error executing module '{module.name}': {e}")
+        # 1. Fast intent router for exact built-in shortcuts
+        intent, module = self.router.dispatch(text)
+        if module:
+            logger.info(f"Routed intent '{intent}' to module '{module.name}'")
+            try:
+                response = module.handle(intent, text, self.context)
+                if response:
+                    node = "MEMORY" if module.name == "memory" else "SYSTEMS"
+                    await self._emit_activity(node, f"Handled '{intent}'")
+                    await event_bus.publish("llm_token", response)
+                    await event_bus.publish("llm_done")
+                    self.tts.speak(response, turn_id=turn_id)
+                    return
+            except Exception as e:
+                logger.error(f"Error executing module '{module.name}': {e}")
 
         # 2. Gather memory & ongoing-work context + explicit privacy metadata BEFORE routing
         memory_module = self.modules.get("memory")
@@ -841,7 +860,7 @@ class CreedEngine:
         )
 
         # Tool scoping
-        if mode == "jee" or not route.needs_tools:
+        if not route.needs_tools:
             tool_schemas = None
         else:
             all_schemas = self.tools.get_ollama_schemas()
@@ -954,7 +973,7 @@ class CreedEngine:
 
         state_name = "Reasoning" if route.path == "intelligent" else "Processing"
         await event_bus.publish("status_change", state_name)
-        node_tag = "JEE" if mode == "jee" else "CONVERSATION"
+        node_tag = "CONVERSATION"
         await self._emit_activity(
             node_tag,
             f"[{route.path.upper()}/{resolved_provider_name}:{resolved_model}] {text[:40]}",
@@ -969,11 +988,6 @@ class CreedEngine:
 
         temp_history = history.copy()
         extra_blocks = []
-        if mode == "jee":
-            from modules.jee_tutor import retrieve_jee_context
-            jee_ctx = retrieve_jee_context(text)
-            if jee_ctx:
-                extra_blocks.append(f"[Pre-loaded JEE Formula & Trap Reference]\n{jee_ctx}")
         if context_memories:
             if "[BEGIN RETRIEVED MEMORY" in context_memories:
                 extra_blocks.append(context_memories)
@@ -994,7 +1008,7 @@ class CreedEngine:
             }
 
         # 3. Promote explicit background requests to persistent TaskOrchestrator when available
-        if route.path == "background" and self.task_orchestrator is not None and mode != "jee":
+        if route.path == "background" and self.task_orchestrator is not None:
             task_title = text.strip()[:60]
             task = self.task_orchestrator.submit_task(
                 title=task_title,

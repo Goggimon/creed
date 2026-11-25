@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
         self._history_loaded = False
         self._current_session_id = "default"
         self._active_chat_target = "default"
+        self._shutting_down = False
 
         self.init_ui()
         self.apply_styles()
@@ -537,6 +538,8 @@ class MainWindow(QMainWindow):
             self.conv_uptime_meta.setText(f"Uptime: {self._format_uptime(self._uptime_seconds)}")
 
     def _run_api(self, method: str, path: str, payload: dict = None, tag: str = "snapshot"):
+        if self._shutting_down:
+            return
         worker = ApiWorker(method=method, path=path, payload=payload, tag=tag)
         worker.response_ready.connect(self._on_api_response)
         worker.api_error.connect(self._on_api_error)
@@ -549,14 +552,18 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_api_error(self, tag: str, err: str):
-        if tag in ("tasks_list", "task_detail", "task_events", "task_events_more", "approvals_list", "task_mutate"):
+        if tag == "save_settings":
+            self.settings_tab.set_save_status(f"Save failed: {err}", is_error=True)
+        elif tag in ("tasks_list", "task_detail", "task_events", "task_events_more", "approvals_list", "task_mutate"):
             self.tasks_tab.show_error(err)
             if tag == "task_mutate":
                 self.fetch_approvals()
                 self.fetch_tasks("")
 
     def _on_api_response(self, tag: str, data: dict):
-        if tag == "snapshot":
+        if tag == "save_settings":
+            self.settings_tab.set_save_status("Saved to .env and applied.")
+        elif tag == "snapshot":
             self.on_snapshot_received(data)
         elif tag == "tasks_list":
             self.tasks_tab.clear_error()
@@ -685,7 +692,7 @@ class MainWindow(QMainWindow):
         self._run_api("DELETE", f"/api/workflows/{workflow_id}", tag="mutate")
 
     def save_settings(self, cfg: dict):
-        self._run_api("POST", "/api/settings", cfg, tag="mutate")
+        self._run_api("POST", "/api/settings", cfg, tag="save_settings")
 
     def select_model(self, model: str):
         self._run_api("POST", "/api/models/select", {"model": model}, tag="mutate")
@@ -730,8 +737,14 @@ class MainWindow(QMainWindow):
         self.on_route_update(router_data)
         self.tools_tab.update_data(tools, data.get("tool_history", []))
         self.automation_tab.update_data(data.get("workflows", []), tools)
+        cfg_data = data.get("config", {})
         self.models_tab.update_data(model, ollama_models, pull_info, ollama_ok)
-        self.settings_tab.update_data(data.get("config", {}), ollama_models)
+        self.settings_tab.update_data(cfg_data, ollama_models)
+        self.input_bar.update_routing_options(
+            data.get("provider_catalog", {}),
+            ollama_models,
+            cloud_model=cfg_data.get("cloud_model", ""),
+        )
 
 
         if not self._history_loaded:
@@ -775,21 +788,27 @@ class MainWindow(QMainWindow):
         self.handle_send(text)
 
     def handle_send(self, text: str):
+        if self._shutting_down:
+            return
         self._active_chat_target = "default"
         allow_private_cloud = False
         try:
+            sel_provider, sel_model = self.input_bar.get_routing_selection()
             allow_private_cloud = self.input_bar.consume_cloud_consent()
             self.chat_view.add_bubble(text, True)
             self.current_ai_bubble = self.chat_view.add_bubble("", False)
             self.radial_hub.pulse_node("CONVERSATION")
-            self.ws_worker.send_message(
-                {
-                    "type": "chat",
-                    "text": text,
-                    "session_id": self._current_session_id,
-                    "allow_private_cloud": allow_private_cloud,
-                }
-            )
+            msg = {
+                "type": "chat",
+                "text": text,
+                "session_id": self._current_session_id,
+                "allow_private_cloud": allow_private_cloud,
+            }
+            if sel_provider:
+                msg["provider"] = sel_provider
+            if sel_model:
+                msg["model"] = sel_model
+            self.ws_worker.send_message(msg)
         finally:
             self.input_bar.reset_cloud_consent()
 
@@ -910,14 +929,23 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
 
     def closeEvent(self, event):
+        # 1. Stop accepting new work
+        self._shutting_down = True
+        self.input_bar.setEnabled(False)
+        # 2. Stop timers and background polling
         self._clock_timer.stop()
         self._snapshot_timer.stop()
+        # 3. Signal workers to terminate & close connections
         self.global_hotkey.stop()
-        self.global_hotkey.wait(250)
         self.ws_worker.stop()
-        self.ws_worker.wait(300)
+        # 4. Bounded waits (never unbounded wait or os._exit)
+        self.global_hotkey.wait(500)
+        self.ws_worker.wait(800)
         for w in list(self._active_api_workers):
-            w.wait(200)
+            if not w.wait(500) and w.isRunning():
+                w.terminate()
+                w.wait(200)
+        self._active_api_workers.clear()
+        # 5. Normal Qt shutdown
         event.accept()
         QApplication.quit()
-        os._exit(0)

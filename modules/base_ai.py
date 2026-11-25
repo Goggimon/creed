@@ -350,11 +350,26 @@ class ProviderRegistry:
     @classmethod
     def create_default(cls) -> "ProviderRegistry":
         from modules.ai import Module as OllamaProvider
-        from modules.cloud_disable import CloudModule
+
+        cloud_cls: Optional[Any] = None
+        _groq_tool_fn: Optional[Callable[[Optional[str]], bool]] = None
+        try:
+            from modules.cloud_disable import CloudModule
+
+            cloud_cls = CloudModule
+            _groq_tool_fn = CloudModule.is_tool_calling_supported
+        except Exception:
+            cloud_cls = None
+            _groq_tool_fn = None
 
         def _make_groq(**kw):
+            if cloud_cls is None:
+                raise ProviderUnavailableError(
+                    "Groq cloud provider unavailable: groq package not installed.",
+                    provider="groq",
+                )
             try:
-                return CloudModule(**kw)
+                return cloud_cls(**kw)
             except Exception as exc:
                 raise ProviderUnavailableError(
                     f"Groq cloud provider unavailable: {exc}", provider="groq", cause=exc
@@ -367,8 +382,8 @@ class ProviderRegistry:
             "groq",
             _make_groq,
             tier="cloud",
-            supports_tools=True,
+            supports_tools=bool(_groq_tool_fn is not None),
             default_model="llama-3.1-8b-instant",
-            tool_capability_fn=CloudModule.is_tool_calling_supported,
+            tool_capability_fn=_groq_tool_fn,
         )
         return reg

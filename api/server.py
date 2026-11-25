@@ -1,11 +1,13 @@
 # api/server.py
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+
 from config.settings import BASE_DIR, config
 from core.event_bus import event_bus
 from core.router import build_creed_engine
@@ -25,9 +27,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-vspotify_path = Path(config.vspotify_dir)
-if vspotify_path.exists():
-    app.mount("/vspotify", StaticFiles(directory=str(vspotify_path), html=True), name="vspotify")
 
 
 class ConnectionManager:
@@ -96,10 +95,6 @@ async def on_voice_level(level):
     await manager.broadcast({"type": "voice_level", "level": level})
 
 
-async def on_vspotify_command(payload):
-    await manager.broadcast({"type": "vspotify_command", "payload": payload})
-
-
 async def on_task_update(payload):
     await manager.broadcast({"type": "task_update", "payload": payload})
 
@@ -117,7 +112,6 @@ event_bus.subscribe("activity", on_activity)
 event_bus.subscribe("tool_event", on_tool_event)
 event_bus.subscribe("node_pulse", on_node_pulse)
 event_bus.subscribe("voice_level", on_voice_level)
-event_bus.subscribe("vspotify_command", on_vspotify_command)
 event_bus.subscribe("task_update", on_task_update)
 event_bus.subscribe("route_update", on_route_update)
 
@@ -587,43 +581,125 @@ def delete_workflow(workflow_id: int):
     return {"status": "ok"}
 
 
+def _parse_bool_setting(raw) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    s = str(raw).strip().lower()
+    if s in ("true", "1", "yes", "on"):
+        return True
+    if s in ("false", "0", "no", "off"):
+        return False
+    raise HTTPException(status_code=422, detail=f"Invalid boolean setting value: {raw!r}")
+
+
+def _write_env_atomic(env_path: Path, updates: dict[str, str]) -> None:
+    import tempfile
+
+    orig_lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    remaining = dict(updates)
+    new_lines: list[str] = []
+    for line in orig_lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in line:
+            k, _ = line.split("=", 1)
+            key = k.strip()
+            if key in remaining:
+                new_lines.append(f"{key}={remaining.pop(key)}")
+                continue
+        new_lines.append(line)
+    for key, val in remaining.items():
+        new_lines.append(f"{key}={val}")
+
+    content = "\n".join(new_lines) + ("\n" if new_lines else "")
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".env.tmp.", dir=str(env_path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, env_path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 @app.post("/api/settings")
 def update_settings(payload: dict):
-    env_path = Path(BASE_DIR) / ".env"
-    existing = {}
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.strip().startswith("#"):
-                k, v = line.split("=", 1)
-                existing[k.strip()] = v.strip()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Settings payload must be a JSON object.")
 
     mapping = {
         "ollama_model": "OLLAMA_MODEL",
-        "jee_tutor_model": "JEE_TUTOR_MODEL",
         "ollama_endpoint": "OLLAMA_ENDPOINT",
+        "local_provider": "CREED_LOCAL_PROVIDER",
+        "cloud_provider": "CREED_CLOUD_PROVIDER",
+        "cloud_model": "CREED_CLOUD_MODEL",
+        "allow_cloud_escalation": "CREED_ALLOW_CLOUD_ESCALATION",
+        "cloud_privacy_mode": "CREED_CLOUD_PRIVACY_MODE",
         "macos_tts_voice": "CREED_MACOS_VOICE",
         "macos_tts_rate": "CREED_TTS_RATE",
         "phone_adb_target": "CREED_PHONE_ADB_TARGET",
     }
+
+    staged_env: dict[str, str] = {}
+    staged_cfg: dict[str, object] = {}
+
     for key, env_key in mapping.items():
-        if key in payload:
-            val = str(payload[key]).strip()
-            existing[env_key] = val
-            if key == "macos_tts_rate":
-                try:
-                    config.macos_tts_rate = int(val)
-                except ValueError:
-                    pass
-            else:
-                setattr(config, key, val)
+        if key not in payload:
+            continue
+        raw_val = payload[key]
+        if key == "allow_cloud_escalation":
+            bval = _parse_bool_setting(raw_val)
+            staged_cfg[key] = bval
+            staged_env[env_key] = "true" if bval else "false"
+        elif key == "cloud_privacy_mode":
+            sval = str(raw_val).strip().lower()
+            if sval not in ("local_on_private", "allow_cloud"):
+                raise HTTPException(
+                    status_code=422,
+                    detail="cloud_privacy_mode must be 'local_on_private' or 'allow_cloud'.",
+                )
+            staged_cfg[key] = sval
+            staged_env[env_key] = sval
+        elif key == "macos_tts_rate":
+            try:
+                ival = int(str(raw_val).strip())
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="macos_tts_rate must be an integer.") from exc
+            if not (50 <= ival <= 500):
+                raise HTTPException(status_code=422, detail="macos_tts_rate must be between 50 and 500.")
+            staged_cfg[key] = ival
+            staged_env[env_key] = str(ival)
+        elif key == "phone_adb_target":
+            sval = str(raw_val).strip()
+            staged_cfg[key] = sval
+            staged_env[env_key] = sval
+        else:
+            sval = str(raw_val).strip()
+            if not sval:
+                raise HTTPException(status_code=422, detail=f"{key} cannot be empty.")
+            staged_cfg[key] = sval
+            staged_env[env_key] = sval
 
-    if "ollama_model" in payload:
-        engine.ai.model = config.ollama_model
-    if "ollama_endpoint" in payload:
-        engine.ai.endpoint = config.ollama_endpoint
+    env_path = Path(BASE_DIR) / ".env"
+    if staged_env:
+        try:
+            _write_env_atomic(env_path, staged_env)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to persist settings to .env: {exc}") from exc
 
-    lines = [f"{k}={v}" for k, v in existing.items()]
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    for key, val in staged_cfg.items():
+        setattr(config, key, val)
+
+    if "ollama_model" in staged_cfg:
+        engine.ai.model = str(staged_cfg["ollama_model"])
+    if "ollama_endpoint" in staged_cfg:
+        engine.ai.endpoint = str(staged_cfg["ollama_endpoint"])
+
     return {"status": "saved", "config": engine.get_system_snapshot()["config"]}
 
 
@@ -662,86 +738,6 @@ async def delete_model(payload: dict):
         return await engine.delete_ollama_model(model)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/vspotify/command")
-async def vspotify_command(payload: dict):
-    from modules.vspotify import dispatch_vspotify_command
-
-    action = (payload.get("action") or "").strip()
-    params = payload.get("params") or {}
-    if not action:
-        raise HTTPException(status_code=400, detail="Action is required.")
-    msg = await dispatch_vspotify_command(action, params)
-    return {"status": "ok", "message": msg}
-
-
-@app.post("/api/jee/flashcards")
-def add_jee_flashcard(payload: dict):
-    memory_mod = engine.modules.get("memory")
-    if not memory_mod:
-        raise HTTPException(status_code=500, detail="Memory module unavailable.")
-    front = (payload.get("front") or "").strip()
-    back = (payload.get("back") or "").strip()
-    if not front or not back:
-        raise HTTPException(status_code=400, detail="Front and back are required.")
-    card = memory_mod.add_flashcard(
-        payload.get("subject", "Physics"),
-        payload.get("chapter", "General"),
-        front,
-        back,
-    )
-    return {"status": "ok", "card": card}
-
-
-@app.post("/api/jee/flashcards/{card_id}/toggle")
-def toggle_jee_flashcard(card_id: int):
-    memory_mod = engine.modules.get("memory")
-    if not memory_mod:
-        raise HTTPException(status_code=500, detail="Memory module unavailable.")
-    if not memory_mod.toggle_flashcard_mastery(card_id):
-        raise HTTPException(status_code=404, detail="Flashcard not found.")
-    return {"status": "ok"}
-
-
-@app.delete("/api/jee/flashcards/{card_id}")
-def delete_jee_flashcard(card_id: int):
-    memory_mod = engine.modules.get("memory")
-    if not memory_mod:
-        raise HTTPException(status_code=500, detail="Memory module unavailable.")
-    if not memory_mod.delete_flashcard(card_id):
-        raise HTTPException(status_code=404, detail="Flashcard not found.")
-    return {"status": "ok"}
-
-
-@app.post("/api/jee/test/generate")
-async def generate_jee_test(payload: dict):
-    from modules.jee_tutor import generate_jee_quiz, pick_reasoning_model
-
-    subject = (payload.get("subject") or "Physics").strip()
-    chapter = (payload.get("chapter") or "").strip()
-    difficulty = (payload.get("difficulty") or "JEE Main").strip()
-    count = max(1, min(15, int(payload.get("count") or 5)))
-    model = pick_reasoning_model(engine.installed_model_names)
-    try:
-        questions = await generate_jee_quiz(subject, chapter, difficulty, count, model)
-        return {"status": "ok", "model": model, "questions": questions}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/jee/test/submit")
-def submit_jee_test(payload: dict):
-    memory_mod = engine.modules.get("memory")
-    if not memory_mod:
-        raise HTTPException(status_code=500, detail="Memory module unavailable.")
-    saved = memory_mod.save_jee_test(
-        payload.get("subject", "Mixed"),
-        payload.get("difficulty", "JEE Main"),
-        int(payload.get("score", 0)),
-        int(payload.get("total", 0)),
-    )
-    return {"status": "ok", "test": saved}
 
 
 @app.post("/chat")

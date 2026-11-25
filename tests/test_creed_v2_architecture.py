@@ -592,6 +592,7 @@ class TestArchitectureBoundaryConformance(unittest.TestCase):
             "modules.bt_audio",
             "modules.phone_adb",
             "modules.vspotify",
+            "modules.jee_tutor",
             "core.voice.stt",
             "core.voice.wake",
         )
@@ -2379,7 +2380,7 @@ class TestPluginCapabilityAndAuthorization(unittest.IsolatedAsyncioTestCase):
         mem = MemoryModule(lock, allow_in_memory=True, legacy_json="__nonexistent__.json")
         engine = build_creed_engine(ai_provider=MockLLMProvider(), memory=mem)
         all_tools = engine.tools.list_tools()
-        self.assertGreaterEqual(len(all_tools), 29)
+        self.assertGreaterEqual(len(all_tools), 25)
         for spec in all_tools:
             self.assertNotEqual(spec.side_effect, "unknown", f"Built-in tool {spec.name} must be explicitly classified")
 

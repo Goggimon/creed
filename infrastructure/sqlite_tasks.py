@@ -550,3 +550,14 @@ class SQLiteTaskRepository:
                     conn.commit()
             except sqlite3.Error as exc:
                 raise TaskStorageError(f"Failed invalidating approval: {exc}") from exc
+
+    def close(self) -> None:
+        with self.lock:
+            try:
+                conn = self._connect()
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                pass

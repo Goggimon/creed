@@ -664,7 +664,7 @@ class AutomationTab(QWidget):
 MODEL_CATALOG = [
     ("qwen2.5-coder:7b", "4.7 GB", "Coding, tool calling & scripts (Fast)"),
     ("qwen3:8b", "5.2 GB", "General reasoning, math & logic (Fast)"),
-    ("deepseek-r1:8b", "4.9 GB", "Step-by-step reasoning & JEE prep"),
+    ("deepseek-r1:8b", "4.9 GB", "Step-by-step reasoning & math"),
     ("qwen2.5:14b", "9.0 GB", "Heavy coding & deep reasoning (16 GB)"),
     ("llama3.1:8b", "4.9 GB", "General assistant & conversation"),
     ("gemma2:9b", "5.4 GB", "Balanced writing & analysis"),
@@ -899,11 +899,13 @@ class SettingsTab(QWidget):
 
     def __init__(self):
         super().__init__()
+        from PySide6.QtWidgets import QCheckBox
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        layout.addWidget(_make_header("Settings", "Environment preferences stored in .env"))
+        layout.addWidget(_make_header("Settings", "Environment preferences stored atomically in .env"))
 
         form = QFrame()
         form.setObjectName("panel_card")
@@ -917,6 +919,11 @@ class SettingsTab(QWidget):
             "background-color: #10151B; border: 1px solid #22303F; border-radius: 6px; padding: 6px 10px; color: #E6EDF2;"
         )
         self.endpoint_input = QLineEdit()
+        self.cloud_escalation_check = QCheckBox("Allow automatic cloud complexity escalation (public turns only)")
+        self.cloud_privacy_combo = QComboBox()
+        self.cloud_privacy_combo.addItems(["local_on_private", "allow_cloud"])
+        self.cloud_provider_input = QLineEdit()
+        self.cloud_model_input = QLineEdit()
         self.voice_input = QLineEdit()
         self.rate_input = QLineEdit()
         self.adb_input = QLineEdit()
@@ -926,6 +933,10 @@ class SettingsTab(QWidget):
         rows = [
             ("Ollama Model", self.model_combo),
             ("Ollama Endpoint", self.endpoint_input),
+            ("Cloud Escalation", self.cloud_escalation_check),
+            ("Cloud Privacy Mode", self.cloud_privacy_combo),
+            ("Cloud Provider", self.cloud_provider_input),
+            ("Cloud Model", self.cloud_model_input),
             ("macOS TTS Voice", self.voice_input),
             ("TTS Rate (WPM)", self.rate_input),
             ("Phone ADB Target (IP:Port)", self.adb_input),
@@ -952,7 +963,18 @@ class SettingsTab(QWidget):
         btn_row.addWidget(restart_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+        self.status_label = QLabel("Ready.")
+        self.status_label.setObjectName("meta_label")
+        layout.addWidget(self.status_label)
         layout.addStretch()
+
+    def set_save_status(self, message: str, is_error: bool = False):
+        self.status_label.setText(message)
+        if is_error:
+            self.status_label.setStyleSheet("color: #EF4444; font-family: 'Menlo', monospace; font-size: 11px;")
+        else:
+            self.status_label.setStyleSheet("color: #10B981; font-family: 'Menlo', monospace; font-size: 11px;")
 
     def update_data(self, cfg: dict, models: list = None):
         if not self.model_combo.hasFocus() and not self.model_combo.view().isVisible():
@@ -967,6 +989,17 @@ class SettingsTab(QWidget):
             self.model_combo.setCurrentText(active)
         if not self.endpoint_input.hasFocus():
             self.endpoint_input.setText(cfg.get("ollama_endpoint", ""))
+        if not self.cloud_escalation_check.hasFocus():
+            self.cloud_escalation_check.setChecked(bool(cfg.get("allow_cloud_escalation", False)))
+        if not self.cloud_privacy_combo.hasFocus() and not self.cloud_privacy_combo.view().isVisible():
+            mode = cfg.get("cloud_privacy_mode", "local_on_private")
+            idx = self.cloud_privacy_combo.findText(mode)
+            if idx >= 0:
+                self.cloud_privacy_combo.setCurrentIndex(idx)
+        if not self.cloud_provider_input.hasFocus():
+            self.cloud_provider_input.setText(cfg.get("cloud_provider", "groq"))
+        if not self.cloud_model_input.hasFocus():
+            self.cloud_model_input.setText(cfg.get("cloud_model", "llama-3.1-8b-instant"))
         if not self.voice_input.hasFocus():
             self.voice_input.setText(cfg.get("macos_tts_voice", ""))
         if not self.rate_input.hasFocus():
@@ -978,10 +1011,16 @@ class SettingsTab(QWidget):
         )
 
     def _emit_save(self):
+        self.status_label.setText("Saving to .env...")
+        self.status_label.setStyleSheet("")
         self.save_requested.emit(
             {
                 "ollama_model": self.model_combo.currentText().strip(),
                 "ollama_endpoint": self.endpoint_input.text().strip(),
+                "allow_cloud_escalation": self.cloud_escalation_check.isChecked(),
+                "cloud_privacy_mode": self.cloud_privacy_combo.currentText().strip(),
+                "cloud_provider": self.cloud_provider_input.text().strip(),
+                "cloud_model": self.cloud_model_input.text().strip(),
                 "macos_tts_voice": self.voice_input.text().strip(),
                 "macos_tts_rate": self.rate_input.text().strip(),
                 "phone_adb_target": self.adb_input.text().strip(),

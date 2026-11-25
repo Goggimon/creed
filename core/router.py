@@ -67,7 +67,6 @@ def build_creed_engine(
     from modules.phone_adb import register_tools as register_phone_tools
     from modules.system import Module as SystemModule, SystemMonitor
     from modules.tts import TTSModule
-    from modules.vspotify import register_tools as register_vspotify_tools
 
     lock = threading.Lock()
     router = IntentRouter()
@@ -117,7 +116,6 @@ def build_creed_engine(
     register_mac_tools(tools)
     register_bt_tools(tools)
     register_phone_tools(tools)
-    register_vspotify_tools(tools)
     register_memory_tools(tools, resolved_memory)
 
     trusted_from_env = [p.strip() for p in config.trusted_plugins.split(",") if p.strip()]
