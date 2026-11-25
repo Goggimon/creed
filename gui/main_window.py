@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         self.ws_worker.connected_signal.connect(self.on_connected)
         self.ws_worker.disconnected_signal.connect(self.on_disconnected)
         self.ws_worker.task_update_received.connect(self.on_task_update)
+        self.ws_worker.route_update_received.connect(self.on_route_update)
         self.ws_worker.start()
 
         self._clock_timer = QTimer(self)
@@ -339,12 +340,41 @@ class MainWindow(QMainWindow):
         self.activity_feed.setWordWrap(True)
         self.activity_feed.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
+        route_hdr = QLabel("ROUTING STATE")
+        route_hdr.setObjectName("section_header")
+        self.route_provider_label = QLabel("Provider: --")
+        self.route_provider_label.setObjectName("meta_label")
+        self.route_model_label = QLabel("Model: --")
+        self.route_model_label.setObjectName("meta_label")
+        self.route_model_label.setWordWrap(True)
+        self.route_tier_label = QLabel("Tier: --")
+        self.route_tier_label.setObjectName("meta_label")
+        self.route_reason_label = QLabel("Reason: --")
+        self.route_reason_label.setObjectName("meta_label")
+        self.route_reason_label.setWordWrap(True)
+        self.route_privacy_label = QLabel("Privacy: --")
+        self.route_privacy_label.setObjectName("meta_label")
+        self.route_consent_label = QLabel("Cloud Consent: OFF")
+        self.route_consent_label.setObjectName("meta_label")
+        self.route_fallback_label = QLabel("Fallback: NONE")
+        self.route_fallback_label.setObjectName("meta_label")
+        self.route_fallback_label.setWordWrap(True)
+
         cr_lay.addWidget(cr_tag)
         cr_lay.addWidget(self.conv_title_label)
         cr_lay.addWidget(self.conv_model_meta)
         cr_lay.addWidget(self.conv_uptime_meta)
         cr_lay.addWidget(hist_btn)
-        cr_lay.addSpacing(8)
+        cr_lay.addSpacing(6)
+        cr_lay.addWidget(route_hdr)
+        cr_lay.addWidget(self.route_provider_label)
+        cr_lay.addWidget(self.route_model_label)
+        cr_lay.addWidget(self.route_tier_label)
+        cr_lay.addWidget(self.route_reason_label)
+        cr_lay.addWidget(self.route_privacy_label)
+        cr_lay.addWidget(self.route_consent_label)
+        cr_lay.addWidget(self.route_fallback_label)
+        cr_lay.addSpacing(6)
         cr_lay.addWidget(act_hdr)
         cr_lay.addWidget(self.activity_feed, 1)
 
@@ -353,7 +383,7 @@ class MainWindow(QMainWindow):
         cm_lay.setContentsMargins(0, 0, 0, 0)
         cm_lay.setSpacing(10)
         self.chat_view = ChatView()
-        self.input_bar = InputBar("Communicate with CREED... (Shift+Enter for newline)")
+        self.input_bar = InputBar("Communicate with CREED... (Shift+Enter for newline)", enable_cloud_consent=True)
         self.input_bar.submitted.connect(self.handle_send)
         self.input_bar.stop_clicked.connect(self.stop_generation)
         self.input_bar.voice_clicked.connect(self.handle_voice_toggle)
@@ -691,11 +721,13 @@ class MainWindow(QMainWindow):
             self._snapshot_timer.setInterval(5000)
 
         self.memory_tab.update_data(data.get("memory", {}), data.get("conversations", []))
+        router_data = data.get("router", {})
         self.systems_tab.update_data(
             data.get("systems", []),
             data.get("latency", {}),
-            data.get("router", {}),
+            router_data,
         )
+        self.on_route_update(router_data)
         self.tools_tab.update_data(tools, data.get("tool_history", []))
         self.automation_tab.update_data(data.get("workflows", []), tools)
         self.models_tab.update_data(model, ollama_models, pull_info, ollama_ok)
@@ -744,12 +776,69 @@ class MainWindow(QMainWindow):
 
     def handle_send(self, text: str):
         self._active_chat_target = "default"
-        self.chat_view.add_bubble(text, True)
-        self.current_ai_bubble = self.chat_view.add_bubble("", False)
-        self.radial_hub.pulse_node("CONVERSATION")
-        self.ws_worker.send_message(
-            {"type": "chat", "text": text, "session_id": self._current_session_id}
+        allow_private_cloud = False
+        try:
+            allow_private_cloud = self.input_bar.consume_cloud_consent()
+            self.chat_view.add_bubble(text, True)
+            self.current_ai_bubble = self.chat_view.add_bubble("", False)
+            self.radial_hub.pulse_node("CONVERSATION")
+            self.ws_worker.send_message(
+                {
+                    "type": "chat",
+                    "text": text,
+                    "session_id": self._current_session_id,
+                    "allow_private_cloud": allow_private_cloud,
+                }
+            )
+        finally:
+            self.input_bar.reset_cloud_consent()
+
+    def on_route_update(self, route: dict):
+        if not route:
+            self.route_provider_label.setText("Provider: --")
+            self.route_model_label.setText("Model: --")
+            self.route_tier_label.setText("Tier: --")
+            self.route_reason_label.setText("Reason: --")
+            self.route_privacy_label.setText("Privacy: --")
+            self.route_consent_label.setText("Cloud Consent: OFF")
+            self.route_fallback_label.setText("Fallback: NONE")
+            self.route_fallback_label.setStyleSheet("")
+            return
+
+        provider = route.get("provider") or "--"
+        model = route.get("model") or "--"
+        tier = str(route.get("tier") or "--").upper()
+        reason = route.get("routing_reason") or "--"
+        privacy = str(route.get("privacy_classification") or "--").upper()
+        consent_on = bool(route.get("cloud_consent", False))
+        fallback_occurred = bool(route.get("fallback_occurred", False))
+        fallback_reason = route.get("fallback_reason") or ""
+        status = route.get("status") or "confirmed"
+        err = route.get("error") or ""
+
+        self.route_provider_label.setText(f"Provider: {provider}")
+        self.route_model_label.setText(f"Model: {model}")
+        self.route_tier_label.setText(f"Tier: {tier}")
+        self.route_reason_label.setText(f"Reason: {reason}")
+        self.route_privacy_label.setText(f"Privacy: {privacy}")
+        self.route_consent_label.setText(
+            "Cloud Consent: ALLOWED (1-TURN)" if consent_on else "Cloud Consent: OFF"
         )
+
+        if status == "failed" or err:
+            self.route_fallback_label.setText(f"Failed: {err or 'provider unavailable'}")
+            self.route_fallback_label.setStyleSheet(
+                "color: #EF4444; font-family: 'Menlo', monospace; font-size: 10.5px;"
+            )
+        elif fallback_occurred:
+            detail = f" ({fallback_reason})" if fallback_reason else ""
+            self.route_fallback_label.setText(f"Fallback: YES{detail}")
+            self.route_fallback_label.setStyleSheet(
+                "color: #F59E0B; font-family: 'Menlo', monospace; font-size: 10.5px;"
+            )
+        else:
+            self.route_fallback_label.setText("Fallback: NONE")
+            self.route_fallback_label.setStyleSheet("")
 
     def handle_voice_toggle(self):
         self.radial_hub.pulse_node("VOICE")

@@ -80,3 +80,25 @@ CREED's architecture is evaluated against six concrete capabilities:
   - `CloudModule` (`modules/cloud_disable.py`) currently sets `supports_tools=False`; tool-dependent turns remain on local providers unless a tool-capable cloud provider is registered.
   - Background tasks promoted to `TaskOrchestrator` (`run_background_agent_turn`) execute locally and do not escalate to cloud mid-task.
   - `.venv/bin/python` (Python 3.12) symlinks outside this sandbox's connected folders (`Operation not permitted`), and `pytest` (an optional `[project.optional-dependencies] dev` package) is not installed in `.venv`; local Python 3.12 verification via `.venv/bin/python -m unittest discover -s tests -v` remains outstanding for the 2 `.venv`-only FastAPI/PySide6 tests.
+
+## 7. Tranche 4.4 — Cloud Tool Support & Routing UI (COMPLETE)
+
+- **Status:** **COMPLETE** (verified in local Python `3.12.16` `.venv` with `82/82` tests passing, `ruff` clean, and `mypy` clean).
+- **Roadmap Terminology:**
+  - **Tranche:** Individual implementation milestone (e.g., Tranche 4.3, Tranche 4.4).
+  - **CREED V1:** Established only after ALL planned V1 tranches are completed and accepted. Completing Tranche 4.4 does **not** establish CREED V1.
+  - **V1 Benchmark:** Comprehensive cold-start evaluation performed after CREED V1 is fully established.
+  - **ELARIS / CREED V2:** Next major development phase and product evolution; begins only after CREED V1 and the V1 Benchmark are complete.
+- **Model-Specific Cloud Tool Calling (`modules/cloud_disable.py`, `modules/base_ai.py`, `intelligence/model_router.py`):**
+  - `CloudModule` maintains an explicit, easily updatable `GROQ_TOOL_CAPABLE_MODELS` allowlist and exposes `is_tool_calling_supported(model)` / `supports_tools_for_model(model)`.
+  - `ProviderRegistry.resolve_provider(..., require_tools=True, model=...)` and `ModelRouter` check model-level tool compatibility before selecting a cloud model; incompatible cloud models are rejected or routed to a compatible local provider.
+  - `CloudModule.stream_turn()` passes OpenAI-format `tools` (`tool_choice="auto"`), normalizes internal tool-turn history (`_format_messages_for_openai`), assembles fragmented `delta.tool_calls` chunks across multiple parallel tool calls, validates JSON arguments (raising `ProviderError` on malformed/non-object JSON), and preserves `ToolRegistry`, `AuthorizationPolicy`, and `ApprovalManager` unchanged.
+- **Per-Turn Cloud Consent & Confirmed Routing UI (`gui/components/input_bar.py`, `gui/main_window.py`, `gui/worker.py`, `api/server.py`, `core/engine.py`):**
+  - `01 INTELLIGENCE` `InputBar` provides a default-OFF `☁ CONSENT: OFF` toggle (`allow_private_cloud`) scoped strictly to a single submitted turn and reset in a `finally:` block even if submission fails. Consent never persists across turns, sessions, or background tasks.
+  - `CreedEngine` publishes `route_update` on `event_bus` only after confirmed provider resolution, pre-stream fallback, or routing/provider failure—never emitting intended routing as confirmed execution.
+  - `01 INTELLIGENCE` displays Active Provider, Active Model, Tier, Routing Reason, Privacy Classification, Cloud Consent Status, and Fallback/Failure status, synchronized via both live `route_update` WebSocket events and `/api/snapshot`.
+- **Verification Results:**
+  - `python3 -m compileall -q core intelligence modules monitoring api config utils gui tests`: passed (exit code `0`).
+  - `.venv/bin/python -m unittest discover -s tests -v` (Python `3.12.16` local environment): **82/82 passed** (including all 6 Tranche 4.4 tests and all FastAPI/PySide6 tests, `0` skipped, `0` failed).
+  - `.venv/bin/ruff check intelligence monitoring config utils tests`: **All checks passed** (`0` errors).
+  - `.venv/bin/mypy intelligence monitoring config`: **No issues** (`0` errors).

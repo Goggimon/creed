@@ -647,9 +647,11 @@ class CreedEngine:
                     f"No compatible local provider available (active provider '{ai_name}' is tier '{ai_tier}').",
                     provider=ai_name,
                 )
-            if require_tools and not getattr(self.ai, "supports_tools", True):
+            supports_fn = getattr(self.ai, "supports_tools_for_model", None)
+            supports_tools = bool(supports_fn(route.model)) if callable(supports_fn) else bool(getattr(self.ai, "supports_tools", True))
+            if require_tools and not supports_tools:
                 raise ProviderUnavailableError(
-                    f"Provider '{ai_name}' does not support required tool calling.",
+                    f"Provider '{ai_name}' (model '{route.model or getattr(self.ai, 'model', '')}') does not support required tool calling.",
                     provider=ai_name,
                 )
             return (
@@ -662,7 +664,7 @@ class CreedEngine:
             )
 
         try:
-            pname, pinst = reg.resolve_provider(route.provider, require_tools=require_tools)
+            pname, pinst = reg.resolve_provider(route.provider, require_tools=require_tools, model=route.model)
             ptier = getattr(pinst, "tier", route.tier or "local")
             pmodel = route.model or getattr(pinst, "model", "")
             return pname, pinst, ptier, pmodel, route.fallback_occurred, route.fallback_reason
@@ -863,6 +865,21 @@ class CreedEngine:
                 fallback_reason,
             ) = self._resolve_routed_provider(route, require_tools=bool(tool_schemas))
         except ProviderUnavailableError as exc:
+            self._last_route = {
+                "path": route.path,
+                "provider": route.requested_provider or route.provider or "unavailable",
+                "model": route.requested_model or route.model or "--",
+                "tier": route.tier or "unknown",
+                "routing_reason": route.routing_reason,
+                "privacy_classification": route.privacy_classification,
+                "cloud_consent": bool(allow_private_cloud),
+                "fallback_occurred": False,
+                "fallback_reason": "",
+                "status": "failed",
+                "error": str(exc),
+                "reason": route.reason,
+            }
+            await event_bus.publish("route_update", dict(self._last_route))
             log_event(
                 "CreedEngine",
                 "turn_failed",
@@ -886,10 +903,14 @@ class CreedEngine:
             "tier": resolved_tier,
             "routing_reason": route.routing_reason,
             "privacy_classification": route.privacy_classification,
+            "cloud_consent": bool(allow_private_cloud),
             "fallback_occurred": fallback_occurred,
             "fallback_reason": fallback_reason,
+            "status": "fallback" if fallback_occurred else "confirmed",
+            "error": "",
             "reason": route.reason,
         }
+        await event_bus.publish("route_update", dict(self._last_route))
         latency_tracker.start_turn(
             turn_id,
             path=route.path,
@@ -1106,6 +1127,13 @@ class CreedEngine:
                     history.append({"role": "assistant", "content": recorded_text})
                     if memory_module:
                         memory_module.save_message(session_id, "assistant", recorded_text)
+            if isinstance(e, ProviderError):
+                self._last_route = {
+                    **self._last_route,
+                    "status": "failed",
+                    "error": str(e),
+                }
+                await event_bus.publish("route_update", dict(self._last_route))
             latency_tracker.finish_turn(turn_id, interrupted=False, error=True)
             if self._active_turn_id == turn_id:
                 await event_bus.publish("error", str(e))
@@ -1224,8 +1252,11 @@ class CreedEngine:
                                 "routing_reason": "cloud_unavailable_fallback",
                                 "fallback_occurred": True,
                                 "fallback_reason": str(exc),
+                                "status": "fallback",
+                                "error": "",
                             }
                         )
+                        await event_bus.publish("route_update", dict(self._last_route))
                         if turn_id:
                             latency_tracker.update_turn_route(
                                 turn_id,

@@ -104,6 +104,10 @@ async def on_task_update(payload):
     await manager.broadcast({"type": "task_update", "payload": payload})
 
 
+async def on_route_update(payload):
+    await manager.broadcast({"type": "route_update", "payload": payload})
+
+
 event_bus.subscribe("status_change", on_status_change)
 event_bus.subscribe("llm_token", on_llm_token)
 event_bus.subscribe("llm_done", on_llm_done)
@@ -115,6 +119,7 @@ event_bus.subscribe("node_pulse", on_node_pulse)
 event_bus.subscribe("voice_level", on_voice_level)
 event_bus.subscribe("vspotify_command", on_vspotify_command)
 event_bus.subscribe("task_update", on_task_update)
+event_bus.subscribe("route_update", on_route_update)
 
 
 @app.get("/")

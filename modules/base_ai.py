@@ -89,6 +89,9 @@ class BaseAIProvider(ABC):
             if event.get("type") == "token":
                 yield event.get("text", "")
 
+    def supports_tools_for_model(self, model: Optional[str] = None) -> bool:
+        return bool(self.supports_tools)
+
     async def health_check(self) -> Dict[str, Any]:
         return {"provider": self.provider_name, "model": self.model, "ok": True}
 
@@ -206,6 +209,7 @@ class ProviderRegistry:
         tier: str = "local",
         supports_tools: bool = True,
         default_model: str = "",
+        tool_capability_fn: Optional[Callable[[Optional[str]], bool]] = None,
     ) -> None:
         key = name.strip().lower()
         self._factories[key] = factory
@@ -214,6 +218,7 @@ class ProviderRegistry:
             "tier": tier,
             "supports_tools": bool(supports_tools),
             "default_model": default_model,
+            "tool_capability_fn": tool_capability_fn,
         }
         if default or not self._active_name:
             self._active_name = key
@@ -226,6 +231,7 @@ class ProviderRegistry:
         *,
         tier: Optional[str] = None,
         supports_tools: Optional[bool] = None,
+        tool_capability_fn: Optional[Callable[[Optional[str]], bool]] = None,
     ) -> None:
         key = name.strip().lower()
         self._instances[key] = instance
@@ -239,6 +245,7 @@ class ProviderRegistry:
                 else bool(getattr(instance, "supports_tools", True))
             ),
             "default_model": getattr(instance, "model", ""),
+            "tool_capability_fn": tool_capability_fn or getattr(instance, "supports_tools_for_model", None),
         }
         if default or not self._active_name:
             self._active_name = key
@@ -295,14 +302,15 @@ class ProviderRegistry:
         *,
         tier: Optional[str] = None,
         require_tools: bool = False,
+        model: Optional[str] = None,
         **kwargs,
     ) -> tuple[str, BaseAIProvider]:
         if name is not None:
             key = name.strip().lower()
             inst = self.get(key, **kwargs)
-            if require_tools and not getattr(inst, "supports_tools", True):
+            if require_tools and not inst.supports_tools_for_model(model):
                 raise ProviderUnavailableError(
-                    f"Provider '{key}' does not support required tool calling.",
+                    f"Provider '{key}' (model '{model or getattr(inst, 'model', '')}') does not support required tool calling.",
                     provider=key,
                 )
             return key, inst
@@ -315,7 +323,7 @@ class ProviderRegistry:
             cand = meta["name"]
             try:
                 inst = self.get(cand, **kwargs)
-                if require_tools and not getattr(inst, "supports_tools", True):
+                if require_tools and not inst.supports_tools_for_model(model):
                     continue
                 return cand, inst
             except ProviderError as exc:
@@ -342,18 +350,25 @@ class ProviderRegistry:
     @classmethod
     def create_default(cls) -> "ProviderRegistry":
         from modules.ai import Module as OllamaProvider
+        from modules.cloud_disable import CloudModule
 
         def _make_groq(**kw):
             try:
-                from modules.cloud_disable import CloudModule
+                return CloudModule(**kw)
             except Exception as exc:
                 raise ProviderUnavailableError(
                     f"Groq cloud provider unavailable: {exc}", provider="groq", cause=exc
                 ) from exc
-            return CloudModule(**kw)
 
         reg = cls()
         reg.register("ollama", lambda **kw: OllamaProvider(**kw), default=True, tier="local", supports_tools=True)
         reg.register("mock", lambda **kw: MockLLMProvider(**kw), tier="local", supports_tools=True)
-        reg.register("groq", _make_groq, tier="cloud", supports_tools=False, default_model="llama-3.1-8b-instant")
+        reg.register(
+            "groq",
+            _make_groq,
+            tier="cloud",
+            supports_tools=True,
+            default_model="llama-3.1-8b-instant",
+            tool_capability_fn=CloudModule.is_tool_calling_supported,
+        )
         return reg

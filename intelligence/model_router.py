@@ -141,11 +141,22 @@ class ModelRouter:
         return first["name"], first.get("default_model", ""), bool(first.get("supports_tools", True))
 
     @staticmethod
+    def _provider_supports_tools(provider_info: dict, model: Optional[str] = None) -> bool:
+        if not provider_info.get("supports_tools", False):
+            return False
+        cap_fn = provider_info.get("tool_capability_fn")
+        target_model = model or provider_info.get("default_model") or ""
+        if callable(cap_fn) and target_model:
+            return bool(cap_fn(target_model))
+        return True
+
+    @staticmethod
     def _pick_cloud_provider(
         cloud_providers: Optional[list[dict]],
         *,
         needs_tools: bool,
         preferred: Optional[str] = None,
+        preferred_model: Optional[str] = None,
     ) -> Optional[dict]:
         providers = list(cloud_providers or [])
         if not providers:
@@ -154,16 +165,18 @@ class ModelRouter:
             pref_key = preferred.strip().lower()
             for p in providers:
                 if p.get("name") == pref_key:
-                    if not needs_tools or p.get("supports_tools", False):
+                    if not needs_tools or ModelRouter._provider_supports_tools(p, preferred_model):
                         return p
                     return None
             return None
         pref_cfg = (config.cloud_provider or "").strip().lower()
         for p in providers:
-            if p.get("name") == pref_cfg and (not needs_tools or p.get("supports_tools", False)):
+            if p.get("name") == pref_cfg and (
+                not needs_tools or ModelRouter._provider_supports_tools(p, preferred_model or config.cloud_model)
+            ):
                 return p
         for p in providers:
-            if not needs_tools or p.get("supports_tools", False):
+            if not needs_tools or ModelRouter._provider_supports_tools(p, preferred_model or config.cloud_model):
                 return p
         return None
 
@@ -297,7 +310,8 @@ class ModelRouter:
                         requested_model=req_model,
                     )
 
-                if cls.needs_tools and not target_supports_tools:
+                chosen_cloud_model = req_model or target_info.get("default_model") or config.cloud_model
+                if cls.needs_tools and not self._provider_supports_tools(target_info, chosen_cloud_model):
                     return RouteDecision(
                         path=cls.path,
                         model=resolved_local_model,
@@ -311,14 +325,13 @@ class ModelRouter:
                         privacy_classification=privacy_classification,
                         fallback_occurred=True,
                         fallback_reason=(
-                            f"Cloud provider '{target_name}' lacks tool-calling support for this turn; "
-                            f"kept on local '{local_name}'."
+                            f"Cloud provider '{target_name}' (model '{chosen_cloud_model}') lacks tool-calling "
+                            f"support for this turn; kept on local '{local_name}'."
                         ),
                         requested_provider=req_provider,
                         requested_model=req_model,
                     )
 
-                chosen_cloud_model = req_model or target_info.get("default_model") or config.cloud_model
                 return RouteDecision(
                     path=cls.path,
                     model=chosen_cloud_model,
